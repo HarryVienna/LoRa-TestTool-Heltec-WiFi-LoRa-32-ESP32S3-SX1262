@@ -516,10 +516,10 @@ static void init_menu(void) {
     menu.current_item = MENU_MODE;
     menu.editing = false;
     menu.mode = MODE_SEND;
-    menu.sf = 7;
+    menu.sf = 5;
     menu.bw = 125;
     menu.cr = LORA_CR_4_5;
-    menu.tx_power = 14;
+    menu.tx_power = -9;
     menu.is_sending = false;
     menu.last_rssi = 0;
     menu.packets_sent = 0;

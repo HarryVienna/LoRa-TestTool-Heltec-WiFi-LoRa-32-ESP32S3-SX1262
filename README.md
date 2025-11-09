@@ -2,7 +2,7 @@
 
 **Interaktives LoRa-Testtool mit OLED-Display und Echtzeit-Parameterkonfiguration**
 
-![ESP32](https://img.shields.io/badge/ESP32-S3-blue) ![LoRa](https://img.shields.io/badge/LoRa-SX1262-green) ![License](https://img.shields.io/badge/license-MIT-orange)
+![ESP32](https://img.shields.io/badge/ESP32-S3-blue) ![LoRa](https://img.shields.io/badge/LoRa-SX1262-green) 
 
 ---
 
@@ -205,7 +205,7 @@ Display:
       Waiting   RX:1      RX:2         RX:3
                 RSSI:-85  RSSI:-82     RSSI:-90
 ```
-## 🔗 Links
+## Links
 
 - [ESP-IDF Dokumentation](https://docs.espressif.com/projects/esp-idf/)
 - [SX1262 Datenblatt](https://www.semtech.com/products/wireless-rf/lora-core/sx1262)
