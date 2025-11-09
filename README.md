@@ -22,7 +22,7 @@
 - **LoRa**: SX1262 Transceiver
 - **Button**: GPIO 0 (Boot-Button)
 
-⚠️ **Wichtig:** Immer Antenne anschließen! (868 MHz für EU, 915 MHz für US)
+⚠️ **Wichtig:** Immer Antenne anschließen!
 
 ## Display Layout
 
