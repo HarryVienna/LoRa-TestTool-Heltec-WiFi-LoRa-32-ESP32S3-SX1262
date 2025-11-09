@@ -97,7 +97,7 @@ Im Receive-Modus:
   - `RSSI:-85` → Signalstärke des letzten Pakets
   - `Waiting...` → Wenn noch nichts empfangen
 
-## 📁 Projektstruktur
+## Projektstruktur
 
 
 ```
@@ -116,19 +116,7 @@ lora-testtool/
 └── CMakeLists.txt
 ```
 
-
-### 2. CMakeLists.txt
-
-**main/CMakeLists.txt:**
-```cmake
-idf_component_register(
-    SRCS "main.c" "lora_testtool.c"
-    INCLUDE_DIRS "."
-    REQUIRES button u8g2 sx1262
-)
-```
-
-### 3. Dependencies
+### Dependencies
 
 Das Projekt benötigt:
 - ✅ **button** - Button-Library (bereits vorhanden)
