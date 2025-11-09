@@ -1,4 +1,4 @@
-# LoRa TestTool für Heltec WiFi LoRa 32 V3.2
+# LoRa TestTool für Heltec WiFi LoRa 32(V3), ESP32S3 + SX1262
 
 **Interaktives LoRa-Testtool mit OLED-Display und Echtzeit-Parameterkonfiguration**
 
