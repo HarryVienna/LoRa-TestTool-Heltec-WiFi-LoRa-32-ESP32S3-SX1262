@@ -2,6 +2,9 @@
 
 **Interaktives LoRa-Testtool mit OLED-Display und Echtzeit-Parameterkonfiguration**
 
+![PXL_20251110_092105251_github](https://github.com/user-attachments/assets/1a1c75ff-7fc7-40b1-8ddd-05989fd5cc19)
+
+
 ![ESP32](https://img.shields.io/badge/ESP32-S3-blue) ![LoRa](https://img.shields.io/badge/LoRa-SX1262-green) 
 
 ---
