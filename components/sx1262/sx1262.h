@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// Pin Definitionen für Heltec WiFi LoRa 32 V3.2
+// Pin definitions for Heltec WiFi LoRa 32 V3.2
 #define LORA_PIN_MISO       11
 #define LORA_PIN_MOSI       10
 #define LORA_PIN_SCK        9
@@ -15,7 +15,7 @@
 #define LORA_PIN_BUSY       13
 #define LORA_PIN_DIO1       14
 
-// SX1262 Befehle
+// SX1262 Commands
 #define SX1262_CMD_SET_SLEEP                0x84
 #define SX1262_CMD_SET_STANDBY              0x80
 #define SX1262_CMD_SET_FS                   0xC1
@@ -23,22 +23,22 @@
 #define SX1262_CMD_SET_RX                   0x82
 #define SX1262_CMD_STOP_TIMER_ON_PREAMBLE   0x9F
 #define SX1262_CMD_SET_RX_DUTY_CYCLE        0x94
-#define SX1262_CMD_SET_CAD                  0xC5
+#define SX1262_CMD_SET_CAD                 0xC5
 #define SX1262_CMD_SET_TX_CONTINUOUS_WAVE   0xD1
 #define SX1262_CMD_SET_TX_INFINITE_PREAMBLE 0xD2
 #define SX1262_CMD_SET_REGULATOR_MODE       0x96
 #define SX1262_CMD_CALIBRATE                0x89
 #define SX1262_CMD_CALIBRATE_IMAGE          0x98
 #define SX1262_CMD_SET_PA_CONFIG            0x95
-#define SX1262_CMD_SET_RX_TX_FALLBACK_MODE  0x93
+#define SX1262_CMD_SET_RX_TX_FALLBACK_MODE   0x93
 
-// Konfigurationsbefehle
+// Configuration commands
 #define SX1262_CMD_WRITE_REGISTER           0x0D
 #define SX1262_CMD_READ_REGISTER            0x1D
 #define SX1262_CMD_WRITE_BUFFER             0x0E
 #define SX1262_CMD_READ_BUFFER              0x1E
 
-// Kommunikationsbefehle
+// Communication commands
 #define SX1262_CMD_GET_STATUS               0xC0
 #define SX1262_CMD_GET_RX_BUFFER_STATUS     0x13
 #define SX1262_CMD_GET_PACKET_STATUS        0x14
@@ -46,14 +46,14 @@
 #define SX1262_CMD_GET_STATS                0x10
 #define SX1262_CMD_RESET_STATS              0x00
 
-// DIO und IRQ Befehle
+// DIO and IRQ commands
 #define SX1262_CMD_SET_DIO_IRQ_PARAMS       0x08
 #define SX1262_CMD_GET_IRQ_STATUS           0x12
 #define SX1262_CMD_CLR_IRQ_STATUS           0x02
 #define SX1262_CMD_SET_DIO2_AS_RF_SWITCH    0x9D
 #define SX1262_CMD_SET_DIO3_AS_TCXO_CTRL    0x97
 
-// RF Modulation und Paket Befehle
+// RF Modulation and Packet commands
 #define SX1262_CMD_SET_RF_FREQUENCY         0x86
 #define SX1262_CMD_SET_PACKET_TYPE          0x8A
 #define SX1262_CMD_GET_PACKET_TYPE          0x11
@@ -76,11 +76,11 @@
 #define SX1262_IRQ_CAD_DETECTED             0x0100
 #define SX1262_IRQ_TIMEOUT                  0x0200
 
-// Paket Typen
+// Packet Types
 #define SX1262_PACKET_TYPE_GFSK             0x00
 #define SX1262_PACKET_TYPE_LORA             0x01
 
-// Register Adressen
+// Register Addresses
 #define SX1262_REG_LORA_SYNC_WORD_MSB       0x0740
 #define SX1262_REG_LORA_SYNC_WORD_LSB       0x0741
 #define SX1262_REG_RANDOM_NUMBER_GEN        0x0819
@@ -91,7 +91,7 @@
 #define SX1262_REG_XTA_TRIM                 0x0911
 #define SX1262_REG_XTB_TRIM                 0x0912
 
-// Bandbreiten
+// Bandwidths
 typedef enum {
     LORA_BW_7_8 = 0x00,
     LORA_BW_10_4 = 0x08,
@@ -165,62 +165,62 @@ typedef enum {
     FSK_RX_BW_467000 = 0x09
 } sx1262_fsk_rx_bw_t;
 
-// Konfigurationsstruktur
+// Configuration structure
 typedef struct {
-    sx1262_modem_mode_t modem_mode;  // LoRa oder FSK
-    uint32_t frequency;              // Frequenz in Hz
-    int8_t tx_power;                 // TX Power in dBm
+    sx1262_modem_mode_t modem_mode; // LoRa or FSK
+    uint32_t frequency;             // Frequency in Hz
+    int8_t tx_power;                // TX Power in dBm
     
-    // LoRa spezifische Parameter
-    sx1262_bandwidth_t bandwidth;    // Bandbreite (nur LoRa)
-    uint8_t spreading_factor;        // Spreading Factor 5-12 (nur LoRa)
-    sx1262_coding_rate_t coding_rate;// Coding Rate (nur LoRa)
-    bool iq_inverted;                // IQ invertiert (nur LoRa)
-    bool rx_gain_boosted;            // true = Boosted RX Gain (+3dB Empfindlichkeit)
+    // LoRa specific parameters
+    sx1262_bandwidth_t bandwidth;     // Bandwidth (LoRa only)
+    uint8_t spreading_factor;       // Spreading Factor 5-12 (LoRa only)
+    sx1262_coding_rate_t coding_rate;// Coding Rate (LoRa only)
+    bool iq_inverted;               // IQ inverted (LoRa only)
+    bool rx_gain_boosted;           // true = Boosted RX Gain (+3dB sensitivity)
     
-    // FSK spezifische Parameter
-    uint32_t fsk_bitrate;            // Bitrate in bps (nur FSK)
-    uint32_t fsk_fdev;               // Frequency deviation in Hz (nur FSK)
-    sx1262_fsk_rx_bw_t fsk_rx_bw;    // RX Bandwidth (nur FSK)
-    sx1262_fsk_mod_shaping_t fsk_shaping; // Pulse shaping (nur FSK)
+    // FSK specific parameters
+    uint32_t fsk_bitrate;           // Bitrate in bps (FSK only)
+    uint32_t fsk_fdev;              // Frequency deviation in Hz (FSK only)
+    sx1262_fsk_rx_bw_t fsk_rx_bw;   // RX Bandwidth (FSK only)
+    sx1262_fsk_mod_shaping_t fsk_shaping; // Pulse shaping (FSK only)
     
-    // Gemeinsame Parameter
-    uint16_t preamble_length;        // Preamble Länge
-    uint8_t payload_length;          // Payload Länge (0 = variable)
-    bool crc_on;                     // CRC aktiviert
-    uint16_t sync_word;              // LoRa Sync Word (0x1424 = public, 0x3444 = private, 0 = default)
+    // Common parameters
+    uint16_t preamble_length;       // Preamble length
+    uint8_t payload_length;         // Payload length (0 = variable)
+    bool crc_on;                    // CRC enabled
+    uint16_t sync_word;             // LoRa Sync Word (0x1424 = public, 0x3444 = private, 0 = default)
 } sx1262_config_t;
 
 typedef struct {
-    int16_t rssi_pkt;      // RSSI des Pakets in dBm
+    int16_t rssi_pkt;      // RSSI of the packet in dBm
     float snr_pkt;         // SNR in dB
     int16_t signal_rssi;   // Signal RSSI in dBm
 } sx1262_packet_status_t;
 
-// Funktionsdeklarationen
+// Function declarations
 
 // ============================================================================
-// PHASE 1: HARDWARE INITIALISIERUNG (einmalig beim Start)
+// PHASE 1: HARDWARE INITIALIZATION (once at startup)
 // ============================================================================
-// Initialisiert: GPIO, SPI, Hardware-Reset, grundlegende Chip-Konfiguration
-// MUSS vor allen anderen Funktionen aufgerufen werden!
+// Initializes: GPIO, SPI, hardware reset, basic chip configuration
+// MUST be called before all other functions!
 esp_err_t sx1262_init(void);
 
 // ============================================================================
-// PHASE 2: LORA KONFIGURATION (beliebig oft aufrufbar)
+// PHASE 2: LORA CONFIGURATION (callable any time)
 // ============================================================================
-// Setzt alle LoRa-Parameter auf einmal (effizient, atomar)
-// Kann beliebig oft aufgerufen werden um Parameter zu ändern
+// Sets all LoRa parameters at once (efficient, atomic)
+// Can be called any time to change parameters
 esp_err_t sx1262_configure(const sx1262_config_t *config);
 
 // ============================================================================
-// PHASE 3: KOMMUNIKATION
+// PHASE 3: COMMUNICATION
 // ============================================================================
 esp_err_t sx1262_send(uint8_t *data, uint8_t len);
 esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms);
 
 // ============================================================================
-// HILFSFUNKTIONEN
+// HELPER FUNCTIONS
 // ============================================================================
 esp_err_t sx1262_sleep(void);
 esp_err_t sx1262_standby(void);

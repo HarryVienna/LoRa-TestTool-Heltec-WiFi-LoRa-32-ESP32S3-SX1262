@@ -1,14 +1,14 @@
 /**
  * @file lora_testtool.c
- * @brief LoRa Test Tool mit interaktivem Menü für Heltec WiFi LoRa 32 V3.2
+ * @brief LoRa Test Tool with interactive menu for Heltec WiFi LoRa 32 V3.2
  * 
  * Navigation:
- * Linke Seite (Menü):
- *   - Short Click: Nächster Menüpunkt
- *   - Long Press: Wechsel zu rechter Seite (Edit-Modus)
- * Rechte Seite (Edit):
- *   - Short Click: Nächster Wert
- *   - Long Press: Zurück zu linker Seite (Menü)
+ * Left Side (Menu):
+ * - Short Click: Next menu item
+ * - Long Press: Switch to right side (Edit mode)
+ * Right Side (Edit):
+ * - Short Click: Next value
+ * - Long Press: Back to left side (Menu)
  */
 
 #include <stdio.h>
@@ -41,7 +41,7 @@ typedef enum {
     MENU_BW,
     MENU_CR,
     MENU_TX_POWER,
-    MENU_COUNT  // Anzahl der Menüpunkte
+    MENU_COUNT  // Number of menu items
 } menu_item_t;
 
 typedef enum {
@@ -50,25 +50,25 @@ typedef enum {
 } operation_mode_t;
 
 typedef struct {
-    menu_item_t current_item;           // Aktueller Menüpunkt
-    bool editing;                       // true = Wert editieren, false = Menü navigieren
+    menu_item_t current_item;       // Current menu item
+    bool editing;                   // true = Edit value, false = Navigate menu
     
-    // LoRa Parameter
-    operation_mode_t mode;              // Send/Receive
-    uint8_t sf;                         // Spreading Factor 5-12
-    uint16_t bw;                        // Bandwidth 125/250/500
-    sx1262_coding_rate_t cr;            // Coding Rate 4/5, 4/6, 4/7, 4/8
-    int8_t tx_power;                    // TX Power -9 bis 22
+    // LoRa Parameters
+    operation_mode_t mode;          // Send/Receive
+    uint8_t sf;                     // Spreading Factor 5-12
+    uint16_t bw;                    // Bandwidth 125/250/500
+    sx1262_coding_rate_t cr;        // Coding Rate 4/5, 4/6, 4/7, 4/8
+    int8_t tx_power;                // TX Power -9 to 22
     
     // Status
-    bool is_sending;                    // Wird gerade gesendet?
-    int16_t last_rssi;                  // Letzter RSSI-Wert
-    uint32_t packets_sent;              // Anzahl gesendeter Pakete
-    uint32_t packets_received;          // Anzahl empfangener Pakete
-    uint32_t last_packet_time;          // Zeitstempel des letzten Pakets
+    bool is_sending;                // Is currently sending?
+    int16_t last_rssi;              // Last RSSI value
+    uint32_t packets_sent;          // Number of packets sent
+    uint32_t packets_received;      // Number of packets received
+    uint32_t last_packet_time;      // Timestamp of the last packet
 } menu_state_t;
 
-// Globale Variablen
+// Global variables
 static menu_state_t menu;
 static u8g2_t u8g2;
 static button_handle_t* button;
@@ -81,7 +81,7 @@ static volatile bool display_needs_update = false;
 // ============================================================================
 
 /**
- * @brief Konvertiert Bandwidth-Wert zu String
+ * @brief Converts Bandwidth value to string
  */
 static const char* bw_to_string(uint16_t bw) {
     switch(bw) {
@@ -93,7 +93,7 @@ static const char* bw_to_string(uint16_t bw) {
 }
 
 /**
- * @brief Konvertiert Coding Rate zu String
+ * @brief Converts Coding Rate to string
  */
 static const char* cr_to_string(sx1262_coding_rate_t cr) {
     switch(cr) {
@@ -106,7 +106,7 @@ static const char* cr_to_string(sx1262_coding_rate_t cr) {
 }
 
 /**
- * @brief Konvertiert Bandwidth zu SX1262 enum
+ * @brief Converts Bandwidth to SX1262 enum
  */
 static sx1262_bandwidth_t bw_to_enum(uint16_t bw) {
     switch(bw) {
@@ -118,10 +118,10 @@ static sx1262_bandwidth_t bw_to_enum(uint16_t bw) {
 }
 
 /**
- * @brief Zeichnet einen Menüpunkt
+ * @brief Draws a menu item
  */
 static void draw_menu_item(int y, const char* label, const char* value, bool is_active, bool is_editing) {
-    // Cursor für aktiven Menüpunkt
+    // Cursor for active menu item
     if (is_active && !is_editing) {
         u8g2_DrawStr(&u8g2, 0, y, ">");
     }
@@ -129,12 +129,12 @@ static void draw_menu_item(int y, const char* label, const char* value, bool is_
     // Label
     u8g2_DrawStr(&u8g2, 8, y, label);
     
-    // Wert (rechts ausgerichtet, invertiert wenn editing)
+    // Value (right-aligned, inverted when editing)
     int value_width = u8g2_GetStrWidth(&u8g2, value);
     int value_x = 128 - value_width - 2;
     
     if (is_active && is_editing) {
-        // Invertierter Balken für Edit-Modus
+        // Inverted bar for Edit mode
         u8g2_SetDrawColor(&u8g2, 1);
         u8g2_DrawBox(&u8g2, value_x - 2, y - 10, value_width + 4, 12);
         u8g2_SetDrawColor(&u8g2, 0);
@@ -146,18 +146,18 @@ static void draw_menu_item(int y, const char* label, const char* value, bool is_
 }
 
 /**
- * @brief Zeichnet die Statuszeile
+ * @brief Draws the status line
  */
 static void draw_status_line(void) {
     char status[32];
     
-    // Trennlinie
+    // Separator line
     u8g2_DrawHLine(&u8g2, 0, 52, 128);
     
     if (menu.mode == MODE_SEND) {
         if (menu.is_sending) {
             snprintf(status, sizeof(status), "TX: %lu", menu.packets_sent);
-            // Blink-Indikator
+            // Blink indicator
             if ((xTaskGetTickCount() / 100) % 2 == 0) {
                 u8g2_DrawStr(&u8g2, 100, 60, "*");
             }
@@ -167,7 +167,7 @@ static void draw_status_line(void) {
     } else {
         if (menu.packets_received > 0) {
             snprintf(status, sizeof(status), "RX:%ld RSSI:%d", 
-                     menu.packets_received, menu.last_rssi);
+                       menu.packets_received, menu.last_rssi);
         } else {
             snprintf(status, sizeof(status), "Waiting...");
         }
@@ -177,10 +177,10 @@ static void draw_status_line(void) {
 }
 
 /**
- * @brief Hauptfunktion zum Zeichnen des Displays (thread-safe)
+ * @brief Main function for drawing the display (thread-safe)
  */
 static void update_display(void) {
-    // Mutex nehmen (max 100ms warten)
+    // Take mutex (wait max 100ms)
     if (xSemaphoreTake(display_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         ESP_LOGW(TAG, "Could not take display mutex");
         return;
@@ -191,7 +191,7 @@ static void update_display(void) {
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_6x10_tr);
     
-    // Menüpunkte zeichnen
+    // Draw menu items
     // Mode
     snprintf(value_str, sizeof(value_str), "%s", 
              menu.mode == MODE_SEND ? "Send" : "Recv");
@@ -218,17 +218,17 @@ static void update_display(void) {
     draw_menu_item(50, "Pwr:", value_str, 
                    menu.current_item == MENU_TX_POWER, menu.editing);
     
-    // Statuszeile
+    // Status line
     draw_status_line();
     
     u8g2_SendBuffer(&u8g2);
     
-    // Mutex freigeben
+    // Release mutex
     xSemaphoreGive(display_mutex);
 }
 
 /**
- * @brief Markiert Display als "needs update" - wird asynchron aktualisiert
+ * @brief Marks display as "needs update" - will be updated asynchronously
  */
 static void request_display_update(void) {
     display_needs_update = true;
@@ -239,7 +239,7 @@ static void request_display_update(void) {
 // ============================================================================
 
 /**
- * @brief Aktualisiert die LoRa-Konfiguration basierend auf Menü-Einstellungen (thread-safe)
+ * @brief Updates the LoRa configuration based on menu settings (thread-safe)
  */
 static void update_lora_config(void) {
     
@@ -276,11 +276,11 @@ static void lora_send_task(void* parameter) {
     
     while (true) {
         if (menu.mode == MODE_SEND) {
-            // Paket vorbereiten
+            // Prepare packet
             snprintf((char*)packet, PACKET_SIZE, 
                      "PKT:%lu SF:%d BW:%d", menu.packets_sent, menu.sf, menu.bw);
             
-            // Senden (mit Mutex-Schutz)
+            // Send (with mutex protection)
             menu.is_sending = true;
             request_display_update();
         
@@ -317,28 +317,28 @@ static void lora_receive_task(void* parameter) {
             if (err == ESP_OK && len > 0) {
                 menu.packets_received++;
 
-                // LED einschalten
-                gpio_set_level(LED_PIN, 1);  // AN
+                // Turn on LED
+                gpio_set_level(LED_PIN, 1);  // ON
 
                 menu.last_packet_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
                 
-                // RSSI auslesen
+                // Read RSSI
                 sx1262_packet_status_t status;
                 if (sx1262_get_packet_status(&status) == ESP_OK) {
                     menu.last_rssi = status.rssi_pkt;
                     ESP_LOGI(TAG, "RX #%lu: %d bytes, RSSI:%d, SNR:%.1f", 
-                                menu.packets_received, len, 
-                                status.rssi_pkt, status.snr_pkt);
+                             menu.packets_received, len, 
+                             status.rssi_pkt, status.snr_pkt);
                 }
                 
-                // Display aktualisieren
+                // Update display
                 request_display_update();
                 
-                // Paket ausgeben
+                // Print packet
                 packet[len] = '\0';
                 ESP_LOGI(TAG, "Data: %s", packet);
 
-                // LED ausschalten nach 100ms
+                // Turn off LED after 100ms
                 vTaskDelay(pdMS_TO_TICKS(100));
                 gpio_set_level(LED_PIN, 0);
             }      
@@ -349,22 +349,22 @@ static void lora_receive_task(void* parameter) {
 }
 
 /**
- * @brief Display Update Task - aktualisiert Display wenn benötigt
+ * @brief Display Update Task - updates display when needed
  */
 static void display_update_task(void* parameter) {
     while (true) {
-        // Prüfe ob Update benötigt wird
+        // Check if update is needed
         if (display_needs_update) {
             display_needs_update = false;
             update_display();
         }
         
-        // Regelmäßiges Update für Blink-Indikator im Send-Modus
+        // Regular update for blink indicator in Send mode
         if (menu.mode == MODE_SEND && menu.is_sending) {
             update_display();
         }
         
-        vTaskDelay(pdMS_TO_TICKS(100));  // 10 Hz Update-Rate
+        vTaskDelay(pdMS_TO_TICKS(100));  // 10 Hz update rate
     }
 }
 
@@ -373,7 +373,7 @@ static void display_update_task(void* parameter) {
 // ============================================================================
 
 /**
- * @brief Nächster Menüpunkt (zyklisch)
+ * @brief Next menu item (cyclic)
  */
 static void menu_next_item(void) {
     menu.current_item = (menu.current_item + 1) % MENU_COUNT;
@@ -382,7 +382,7 @@ static void menu_next_item(void) {
 }
 
 /**
- * @brief Nächster Wert für aktuellen Menüpunkt
+ * @brief Next value for current menu item
  */
 static void menu_next_value(void) {
     bool config_changed = true;
@@ -390,7 +390,7 @@ static void menu_next_value(void) {
     switch(menu.current_item) {
         case MENU_MODE:
             menu.mode = (menu.mode == MODE_SEND) ? MODE_RECEIVE : MODE_SEND;
-            // Reset counters beim Modewechsel
+            // Reset counters on mode change
             menu.packets_sent = 0;
             menu.packets_received = 0;
             menu.last_rssi = 0;
@@ -433,7 +433,7 @@ static void menu_next_value(void) {
             break;
     }
     
-    // LoRa-Konfiguration aktualisieren
+    // Update LoRa configuration
     if (config_changed) {
         update_lora_config();
     }
@@ -442,7 +442,7 @@ static void menu_next_value(void) {
 }
 
 /**
- * @brief Wechsel in Edit-Modus
+ * @brief Switch to Edit mode
  */
 static void menu_enter_edit_mode(void) {
     menu.editing = true;
@@ -451,7 +451,7 @@ static void menu_enter_edit_mode(void) {
 }
 
 /**
- * @brief Wechsel zurück in Menü-Modus
+ * @brief Switch back to Menu mode
  */
 static void menu_exit_edit_mode(void) {
     menu.editing = false;
@@ -464,41 +464,39 @@ static void menu_exit_edit_mode(void) {
 // ============================================================================
 
 /**
- * @brief Button Callback - behandelt alle Button-Events
- * 
- * NAVIGATION:
- * Linke Seite (Menü):
- *   - Short Click: Nächster Menüpunkt
- *   - Long Press: Wechsel zu rechter Seite (Edit-Modus)
- * 
- * Rechte Seite (Edit):
- *   - Short Click: Nächster Wert
- *   - Long Press: Zurück zu linker Seite (Menü-Modus)
+ * @brief Button Callback - handles all button events
+ * * NAVIGATION:
+ * Left Side (Menu):
+ * - Short Click: Next menu item
+ * - Long Press: Switch to right side (Edit mode)
+ * * Right Side (Edit):
+ * - Short Click: Next value
+ * - Long Press: Back to left side (Menu mode)
  */
 static void button_callback(button_press_type_t type) {
     switch(type) {
         case BUTTON_PRESS_SHORT:
             if (menu.editing) {
-                // Im Edit-Modus: Nächster Wert
+                // In Edit mode: Next value
                 menu_next_value();
             } else {
-                // Im Menü-Modus: Nächster Menüpunkt
+                // In Menu mode: Next menu item
                 menu_next_item();
             }
             break;
             
         case BUTTON_PRESS_LONG:
             if (menu.editing) {
-                // Im Edit-Modus: Zurück zum Menü
+                // In Edit mode: Back to menu
                 menu_exit_edit_mode();
             } else {
-                // Im Menü-Modus: In Edit-Modus wechseln
+                // In Menu mode: Switch to Edit mode
                 menu_enter_edit_mode();
             }
             break;
             
         case BUTTON_PRESS_DOUBLE:
-            // Double-Click wird nicht verwendet
+            // Double-click is not used
             break;
     }
 }
@@ -508,7 +506,7 @@ static void button_callback(button_press_type_t type) {
 // ============================================================================
 
 /**
- * @brief Initialisiert das Menü mit Standardwerten
+ * @brief Initializes the menu with default values
  */
 static void init_menu(void) {
     memset(&menu, 0, sizeof(menu_state_t));
@@ -527,7 +525,7 @@ static void init_menu(void) {
 }
 
 /**
- * @brief Initialisiert den Button
+ * @brief Initializes the button
  */
 static esp_err_t init_button(void) {
     button_config_t button_config = {
@@ -535,7 +533,7 @@ static esp_err_t init_button(void) {
         .active_low = true,
         .short_press_callback = button_callback,
         .long_press_callback = button_callback,
-        .double_click_callback = NULL,  // Wird nicht verwendet
+        .double_click_callback = NULL,  // Not used
         .enable_repeat = false
     };
     
@@ -550,7 +548,7 @@ static esp_err_t init_button(void) {
 }
 
 /**
- * @brief Initialisiert das Display
+ * @brief Initializes the display
  */
 static esp_err_t init_display(u8g2_t* display) {
     if (!display) {
@@ -558,17 +556,17 @@ static esp_err_t init_display(u8g2_t* display) {
         return ESP_FAIL;
     }
     
-    // Display-Zeiger übernehmen
+    // Take over display pointer
     memcpy(&u8g2, display, sizeof(u8g2_t));
     
-    // Mutex erstellen für thread-safe Display-Zugriff
+    // Create mutex for thread-safe display access
     display_mutex = xSemaphoreCreateMutex();
     if (display_mutex == NULL) {
         ESP_LOGE(TAG, "Failed to create display mutex");
         return ESP_FAIL;
     }
     
-    // Test-Ausgabe
+    // Test output
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_6x10_tr);
     u8g2_DrawStr(&u8g2, 10, 30, "LoRa TestTool");
@@ -580,18 +578,18 @@ static esp_err_t init_display(u8g2_t* display) {
 }
 
 /**
- * @brief Startet die LoRa-Tasks und Display-Task
+ * @brief Starts the LoRa tasks and Display task
  */
 static esp_err_t start_lora_tasks(void) {
     BaseType_t ret;
     
-    // Display Update Task (höchste Priorität für UI-Responsiveness)
+    // Display Update Task (highest priority for UI responsiveness)
     ret = xTaskCreate(
         display_update_task,
         "display_upd",
         3072,
         NULL,
-        6,  // Höhere Priorität
+        6,  // Higher priority
         NULL
     );
     
@@ -639,15 +637,14 @@ static esp_err_t start_lora_tasks(void) {
 // ============================================================================
 
 /**
- * @brief Hauptinitialisierung des LoRa TestTools
- * 
- * @param display Zeiger auf initialisiertes u8g2 Display
- * @return ESP_OK bei Erfolg
+ * @brief Main initialization of the LoRa TestTool
+ * * @param display Pointer to initialized u8g2 display
+ * @return ESP_OK on success
  */
 esp_err_t lora_testtool_init(u8g2_t* display) {
     ESP_LOGI(TAG, "=== LoRa TestTool Initializing ===");
     
-    // LED GPIO konfigurieren
+    // Configure LED GPIO
     gpio_config_t led_conf = {
         .pin_bit_mask = (1ULL << LED_PIN),
         .mode = GPIO_MODE_OUTPUT,
@@ -655,54 +652,54 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
     };
     gpio_config(&led_conf);
-    gpio_set_level(LED_PIN, 0);  // LED aus
+    gpio_set_level(LED_PIN, 0);  // LED OFF
 
-    // Menü initialisieren
+    // Initialize menu
     init_menu();
     
-    // Display initialisieren
+    // Initialize display
     if (init_display(display) != ESP_OK) {
         return ESP_FAIL;
     }
     
-    // SX1262 initialisieren
+    // Initialize SX1262
     ESP_LOGI(TAG, "Initializing SX1262...");
     if (sx1262_init() != ESP_OK) {
         ESP_LOGE(TAG, "SX1262 initialization failed");
         return ESP_FAIL;
     }
     
-    // Initiale LoRa-Konfiguration
+    // Initial LoRa configuration
     update_lora_config();
     
-    // Button initialisieren
+    // Initialize button
     if (init_button() != ESP_OK) {
         return ESP_FAIL;
     }
     
-    // LoRa-Tasks starten
+    // Start LoRa tasks
     if (start_lora_tasks() != ESP_OK) {
         return ESP_FAIL;
     }
     
-    // Initiales Display-Update
-    vTaskDelay(pdMS_TO_TICKS(1000));  // Kurze Pause für "Initializing..."
+    // Initial Display update
+    vTaskDelay(pdMS_TO_TICKS(1000));  // Short pause for "Initializing..."
     request_display_update();
     
     ESP_LOGI(TAG, "=== LoRa TestTool Ready ===");
     ESP_LOGI(TAG, "Navigation:");
-    ESP_LOGI(TAG, "  Left Side (Menu):");
-    ESP_LOGI(TAG, "    - Short Click: Next menu item");
-    ESP_LOGI(TAG, "    - Long Press:  Enter edit mode");
-    ESP_LOGI(TAG, "  Right Side (Edit):");
-    ESP_LOGI(TAG, "    - Short Click: Next value");
-    ESP_LOGI(TAG, "    - Long Press:  Back to menu");
+    ESP_LOGI(TAG, "   Left Side (Menu):");
+    ESP_LOGI(TAG, "     - Short Click: Next menu item");
+    ESP_LOGI(TAG, "     - Long Press:  Enter edit mode");
+    ESP_LOGI(TAG, "   Right Side (Edit):");
+    ESP_LOGI(TAG, "     - Short Click: Next value");
+    ESP_LOGI(TAG, "     - Long Press:  Back to menu");
     
     return ESP_OK;
 }
 
 /**
- * @brief Gibt Ressourcen frei
+ * @brief Frees resources
  */
 void lora_testtool_deinit(void) {
     if (button) {

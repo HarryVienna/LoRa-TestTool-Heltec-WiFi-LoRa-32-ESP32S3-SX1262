@@ -14,21 +14,18 @@ extern "C" {
 #endif
 
 /**
- * @brief Initialisiert das LoRa TestTool
- * 
- * Voraussetzungen:
- * - U8g2 Display muss bereits initialisiert sein
- * - SPI muss noch NICHT initialisiert sein (wird intern gemacht)
- * 
- * @param display Zeiger auf initialisiertes u8g2 Display
- * @return ESP_OK bei Erfolg, ESP_FAIL bei Fehler
- * 
- * @note Nach erfolgreicher Initialisierung läuft das Tool selbstständig
+ * @brief Initializes the LoRa TestTool
+ * * Prerequisites:
+ * - U8g2 display must already be initialized
+ * - SPI must NOT yet be initialized (is done internally)
+ * * @param display Pointer to initialized u8g2 display
+ * @return ESP_OK on success, ESP_FAIL on error
+ * * @note After successful initialization, the tool runs independently
  */
 esp_err_t lora_testtool_init(u8g2_t* display);
 
 /**
- * @brief Gibt alle Ressourcen frei
+ * @brief Frees all resources
  */
 void lora_testtool_deinit(void);
 

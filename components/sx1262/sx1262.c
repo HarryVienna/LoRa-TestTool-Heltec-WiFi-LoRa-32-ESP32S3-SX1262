@@ -11,12 +11,12 @@ static const char *TAG = "SX1262";
 
 static SemaphoreHandle_t sx1262_mutex = NULL;
 
-// Globale Variablen
+// Global variables
 static spi_device_handle_t spi_handle;
 static sx1262_config_t current_config;
 static bool hw_initialized = false;
 
-// Hilfsfunktionen (Forward Declarations)
+// Helper functions (Forward Declarations)
 static void sx1262_reset(void);
 static void sx1262_wait_on_busy(void);
 
@@ -34,16 +34,16 @@ static esp_err_t sx1262_clear_irq_status(uint16_t irq_mask);
 static uint16_t sx1262_get_irq_status(void);
 
 // ============================================================================
-// PHASE 1: HARDWARE INITIALISIERUNG
+// PHASE 1: HARDWARE INITIALIZATION
 // ============================================================================
 
 esp_err_t sx1262_init(void)
 {
     esp_err_t ret;
 
-    ESP_LOGI(TAG, "Hardware-Initialisierung...");
+    ESP_LOGI(TAG, "Hardware initialization...");
 
-    // Mutex erstellen
+    // Create mutex
     if (sx1262_mutex == NULL) {
         sx1262_mutex = xSemaphoreCreateRecursiveMutex();
         if (sx1262_mutex == NULL) {
@@ -53,7 +53,7 @@ esp_err_t sx1262_init(void)
         ESP_LOGI(TAG, "Mutex created successfully");
     }
 
-    // GPIO Konfiguration
+    // GPIO Configuration
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << LORA_PIN_RST) | (1ULL << LORA_PIN_BUSY),
         .mode = GPIO_MODE_INPUT,
@@ -62,20 +62,20 @@ esp_err_t sx1262_init(void)
         .intr_type = GPIO_INTR_DISABLE
     };
     
-    // BUSY als Input
+    // BUSY as Input
     gpio_config(&io_conf);
 
-    // RST als Output
+    // RST as Output
     io_conf.pin_bit_mask = (1ULL << LORA_PIN_RST);
     io_conf.mode = GPIO_MODE_OUTPUT;
     gpio_config(&io_conf);
 
-    // DIO1 als Input (für Interrupt)
+    // DIO1 as Input (for Interrupt)
     io_conf.pin_bit_mask = (1ULL << LORA_PIN_DIO1);
     io_conf.mode = GPIO_MODE_INPUT;
     gpio_config(&io_conf);
 
-    // SPI Bus Konfiguration
+    // SPI Bus Configuration
     spi_bus_config_t buscfg = {
         .miso_io_num = LORA_PIN_MISO,
         .mosi_io_num = LORA_PIN_MOSI,
@@ -87,11 +87,11 @@ esp_err_t sx1262_init(void)
 
     ret = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI Bus Init fehlgeschlagen");
+        ESP_LOGE(TAG, "SPI Bus Init failed");
         return ret;
     }
 
-    // SPI Device Konfiguration
+    // SPI Device Configuration
     spi_device_interface_config_t devcfg = {
         .clock_speed_hz = 1 * 1000 * 1000,  // 1 MHz
         .mode = 0,
@@ -103,7 +103,7 @@ esp_err_t sx1262_init(void)
 
     ret = spi_bus_add_device(SPI2_HOST, &devcfg, &spi_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI Device Add fehlgeschlagen");
+        ESP_LOGE(TAG, "SPI Device Add failed");
         return ret;
     }
 
@@ -111,67 +111,67 @@ esp_err_t sx1262_init(void)
     sx1262_reset();
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Auf BUSY warten
+    // Wait on BUSY
     sx1262_wait_on_busy();
 
-    // Standby Mode setzen
-    uint8_t standby_config = 0x01; // STDBY_XOSC (für TCXO)
+    // Set Standby Mode
+    uint8_t standby_config = 0x01; // STDBY_XOSC (for TCXO)
     ret = sx1262_write_command(SX1262_CMD_SET_STANDBY, &standby_config, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Standby setzen fehlgeschlagen");
+        ESP_LOGE(TAG, "Setting Standby failed");
         return ret;
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // DIO3 als TCXO Control konfigurieren (3.3V, 5ms timeout)
+    // Configure DIO3 as TCXO Control (3.3V, 5ms timeout)
     uint8_t tcxo_config[4] = {0x07, 0x00, 0x01, 0x40}; // 320 * 15.625us = 5ms
     ret = sx1262_write_command(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_config, 4);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "TCXO Konfiguration fehlgeschlagen");
+        ESP_LOGE(TAG, "TCXO configuration failed");
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // DIO2 als RF Switch Control
+    // DIO2 as RF Switch Control
     uint8_t dio2_config = 0x01; // Enable
     ret = sx1262_write_command(SX1262_CMD_SET_DIO2_AS_RF_SWITCH, &dio2_config, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "DIO2 Konfiguration fehlgeschlagen");
+        ESP_LOGE(TAG, "DIO2 configuration failed");
     }
 
-    // Regulator Mode setzen (DC-DC)
+    // Set Regulator Mode (DC-DC)
     uint8_t regulator_mode = 0x01; // DC-DC + LDO
     ret = sx1262_write_command(SX1262_CMD_SET_REGULATOR_MODE, &regulator_mode, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Regulator Mode fehlgeschlagen");
+        ESP_LOGE(TAG, "Regulator Mode failed");
     }
 
     // Calibrate
-    uint8_t calib_param = 0x7F; // Alle
+    uint8_t calib_param = 0x7F; // All
     ret = sx1262_write_command(SX1262_CMD_CALIBRATE, &calib_param, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Kalibrierung fehlgeschlagen");
+        ESP_LOGE(TAG, "Calibration failed");
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // RxTxFallbackMode setzen (Chip geht nach TX/RX zurück zu STDBY_XOSC)
+    // Set RxTxFallbackMode (Chip goes back to STDBY_XOSC after TX/RX)
     uint8_t fallback_mode = 0x30; // STDBY_XOSC
     ret = sx1262_write_command(SX1262_CMD_SET_RX_TX_FALLBACK_MODE, &fallback_mode, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "RxTx Fallback Mode fehlgeschlagen");
+        ESP_LOGE(TAG, "RxTx Fallback Mode failed");
         return ret;
     }
 
     hw_initialized = true;
-    ESP_LOGI(TAG, "Hardware erfolgreich initialisiert");
+    ESP_LOGI(TAG, "Hardware initialized successfully");
     
     return ESP_OK;
 }
 
 // ============================================================================
-// PHASE 2: LORA KONFIGURATION
+// PHASE 2: LORA CONFIGURATION
 // ============================================================================
 
 esp_err_t sx1262_configure(const sx1262_config_t *config)
@@ -179,7 +179,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     esp_err_t ret = ESP_OK;
 
     if (!hw_initialized) {
-        ESP_LOGE(TAG, "Hardware nicht initialisiert! Rufe sx1262_hw_init() zuerst auf!");
+        ESP_LOGE(TAG, "Hardware not initialized! Call sx1262_hw_init() first!");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -187,34 +187,34 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Mutex nehmen (max 5 Sekunden warten)
+    // Take mutex (wait max 5 seconds)
     if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to take mutex for configure");
         return ESP_ERR_TIMEOUT;
     }
 
-    ESP_LOGI(TAG, "Konfiguriere LoRa Parameter...");
+    ESP_LOGI(TAG, "Configuring LoRa Parameters...");
 
-    // Kopiere Config
+    // Copy Config
     memcpy(&current_config, config, sizeof(sx1262_config_t));
 
     // Standby
     ret = sx1262_standby();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Standby fehlgeschlagen");
+        ESP_LOGE(TAG, "Standby failed");
         goto cleanup;
     }
 
-    // 1. Paket Typ setzen (LoRa oder FSK)
+    // 1. Set Packet Type (LoRa or FSK)
     uint8_t packet_type = (config->modem_mode == SX1262_MODEM_LORA) ? 
-                          SX1262_PACKET_TYPE_LORA : SX1262_PACKET_TYPE_GFSK;
+                           SX1262_PACKET_TYPE_LORA : SX1262_PACKET_TYPE_GFSK;
     ret = sx1262_write_command(SX1262_CMD_SET_PACKET_TYPE, &packet_type, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Paket Typ setzen fehlgeschlagen");
+        ESP_LOGE(TAG, "Setting Packet Type failed");
         goto cleanup;
     }
 
-    // 2. RF Frequenz setzen
+    // 2. Set RF Frequency
     uint32_t freq_reg = ((uint64_t)config->frequency << 25) / 32000000;
     uint8_t freq_params[4];
     freq_params[0] = (freq_reg >> 24) & 0xFF;
@@ -224,23 +224,23 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     
     ret = sx1262_write_command(SX1262_CMD_SET_RF_FREQUENCY, freq_params, 4);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Frequenz setzen fehlgeschlagen");
+        ESP_LOGE(TAG, "Setting Frequency failed");
         goto cleanup;
     }
 
-    // 3. PA Config setzen
+    // 3. Set PA Config
 
     // Semtech_SX1261_2 V2-2.pdf Chapter 15.2 TxClampConfig fix
     uint8_t tx_clamp_cfg;
     ret = sx1262_read_register(SX1262_REG_TX_CLAMP_CFG, &tx_clamp_cfg, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "TX_CLAMP_CFG Read fehlgeschlagen");
+        ESP_LOGE(TAG, "TX_CLAMP_CFG Read failed");
         goto cleanup;
     }
     tx_clamp_cfg = tx_clamp_cfg | 0x1E;
     ret = sx1262_write_register(SX1262_REG_TX_CLAMP_CFG, &tx_clamp_cfg, 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "TX_CLAMP_CFG Read fehlgeschlagen");
+        ESP_LOGE(TAG, "TX_CLAMP_CFG Read failed");
         goto cleanup;
     }
 
@@ -274,11 +274,11 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     
     ret = sx1262_write_command(SX1262_CMD_SET_PA_CONFIG, pa_config, 4);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "PA Config fehlgeschlagen");
+        ESP_LOGE(TAG, "PA Config failed");
         goto cleanup;
     }
     
-    // OCP setzen
+    // Set OCP
     uint8_t ocp_value;
     if (power >= 20) {
         ocp_value = 0x38;  // 140 mA
@@ -290,22 +290,22 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     
     ret = sx1262_write_register(SX1262_REG_OCP_CONFIGURATION, &ocp_value, 1);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "OCP setzen fehlgeschlagen");
+        ESP_LOGW(TAG, "Setting OCP failed");
         goto cleanup;
     }
 
-    // 4. TX Params setzen
+    // 4. Set TX Params
     uint8_t tx_params[2];
     tx_params[0] = power;
     tx_params[1] = 0x04; // 200us ramp
     
     ret = sx1262_write_command(SX1262_CMD_SET_TX_PARAMS, tx_params, 2);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "TX Params setzen fehlgeschlagen");
+        ESP_LOGE(TAG, "Setting TX Params failed");
         goto cleanup;
     }
 
-    // 5. Modulation Params setzen
+    // 5. Set Modulation Params
     if (config->modem_mode == SX1262_MODEM_LORA) {
         // LoRa Modulation
         uint8_t mod_params[4];
@@ -334,11 +334,11 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     }
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Modulation Params fehlgeschlagen");
+        ESP_LOGE(TAG, "Modulation Params failed");
         goto cleanup;
     }
 
-    // 6. Packet Params setzen
+    // 6. Set Packet Params
     if (config->modem_mode == SX1262_MODEM_LORA) {
         // LoRa Packet Parameters
         uint8_t packet_params[6];
@@ -371,53 +371,53 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     }
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Paket Params fehlgeschlagen");
+        ESP_LOGE(TAG, "Packet Params failed");
         goto cleanup;
     }
 
-    // 7. Sync Word setzen (nur für LoRa, optional)
+    // 7. Set Sync Word (LoRa only, optional)
     if (config->modem_mode == SX1262_MODEM_LORA && config->sync_word != 0) {
         uint8_t sync_word_msb = (config->sync_word >> 8) & 0xFF;
         uint8_t sync_word_lsb = config->sync_word & 0xFF;
         
         ret = sx1262_write_register(SX1262_REG_LORA_SYNC_WORD_MSB, &sync_word_msb, 1);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Sync Word MSB setzen fehlgeschlagen");
+            ESP_LOGW(TAG, "Setting Sync Word MSB failed");
             goto cleanup;
         }
         
         ret = sx1262_write_register(SX1262_REG_LORA_SYNC_WORD_LSB, &sync_word_lsb, 1);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Sync Word LSB setzen fehlgeschlagen");
+            ESP_LOGW(TAG, "Setting Sync Word LSB failed");
             goto cleanup;
         }
         
-        ESP_LOGI(TAG, "Sync Word gesetzt: 0x%04X", config->sync_word);
+        ESP_LOGI(TAG, "Sync Word set: 0x%04X", config->sync_word);
     }
 
-    // 8. Buffer Base Address setzen
+    // 8. Set Buffer Base Address
     uint8_t buffer_params[2] = {0x00, 0x00}; // TX=0, RX=0
     ret = sx1262_write_command(SX1262_CMD_SET_BUFFER_BASE_ADDRESS, buffer_params, 2);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Buffer Base Address fehlgeschlagen");
+        ESP_LOGE(TAG, "Buffer Base Address failed");
         goto cleanup;
     }
 
-    // 9. IRQ konfigurieren
+    // 9. Configure IRQ
     ret = sx1262_set_dio_irq_params(SX1262_IRQ_TX_DONE | SX1262_IRQ_RX_DONE | SX1262_IRQ_TIMEOUT,
-                                    SX1262_IRQ_TX_DONE | SX1262_IRQ_RX_DONE | SX1262_IRQ_TIMEOUT,
-                                    0x0000, 0x0000);
+                                   SX1262_IRQ_TX_DONE | SX1262_IRQ_RX_DONE | SX1262_IRQ_TIMEOUT,
+                                   0x0000, 0x0000);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "IRQ Config fehlgeschlagen");
+        ESP_LOGE(TAG, "IRQ Config failed");
         goto cleanup;
     }
 
-    // 10. RX Gain setzen
+    // 10. Set RX Gain
     if (config->rx_gain_boosted) {
         uint8_t rx_gain_boosted = 0x96;
         ret = sx1262_write_register(SX1262_REG_RX_GAIN, &rx_gain_boosted, 1);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "RX Gain Boosted setzen fehlgeschlagen");
+            ESP_LOGW(TAG, "Setting RX Gain Boosted failed");
             goto cleanup;
         } else {
             ESP_LOGI(TAG, "RX Gain: Boosted");
@@ -426,29 +426,29 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         uint8_t rx_gain_power_save = 0x94;
         ret = sx1262_write_register(SX1262_REG_RX_GAIN, &rx_gain_power_save, 1);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "RX Gain Power Save setzen fehlgeschlagen");
+            ESP_LOGW(TAG, "Setting RX Gain Power Save failed");
             goto cleanup;
         } else {
             ESP_LOGI(TAG, "RX Gain: Power Save");
         }
     }
 
-    ESP_LOGI(TAG, "Konfiguration abgeschlossen: Mode=%s, Freq=%luHz, SF=%d, BW=%d, CR=%d, TX=%ddBm",
+    ESP_LOGI(TAG, "Configuration complete: Mode=%s, Freq=%luHz, SF=%d, BW=%d, CR=%d, TX=%ddBm",
              config->modem_mode == SX1262_MODEM_LORA ? "LoRa" : "FSK",
              config->frequency,
              config->spreading_factor,
              config->bandwidth,
              config->coding_rate,
-             config->tx_power);     
+             config->tx_power);    
 
 cleanup:
-    // Mutex freigeben
+    // Release mutex
     xSemaphoreGiveRecursive(sx1262_mutex);
     return ret;
 }
 
 // ============================================================================
-// PHASE 3: KOMMUNIKATION 
+// PHASE 3: COMMUNICATION 
 // ============================================================================
 
 esp_err_t sx1262_send(uint8_t *data, uint8_t len)
@@ -456,7 +456,7 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
     esp_err_t ret = ESP_OK;
 
     if (!hw_initialized) {
-        ESP_LOGE(TAG, "Hardware nicht initialisiert!");
+        ESP_LOGE(TAG, "Hardware not initialized!");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -464,7 +464,7 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Mutex nehmen
+    // Take mutex
     if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to take mutex for send");
         return ESP_ERR_TIMEOUT;
@@ -476,13 +476,13 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
         goto cleanup; 
     }
 
-    // IRQ Status löschen
+    // Clear IRQ Status
     ret = sx1262_clear_irq_status(0xFFFF);
     if (ret != ESP_OK) {
         goto cleanup; 
     }
 
-    // Daten in Buffer schreiben
+    // Write data to buffer
     uint8_t offset = 0x00;
     uint8_t buffer[256];
     buffer[0] = offset;
@@ -490,11 +490,11 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
     
     ret = sx1262_write_command(SX1262_CMD_WRITE_BUFFER, buffer, len + 1);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Buffer schreiben fehlgeschlagen");
+        ESP_LOGE(TAG, "Writing buffer failed");
         goto cleanup; 
     }
 
-    // Paket Parameter aktualisieren mit aktueller Länge
+    // Update packet parameters with current length
     uint8_t packet_params[6];
     packet_params[0] = (current_config.preamble_length >> 8) & 0xFF;
     packet_params[1] = current_config.preamble_length & 0xFF;
@@ -505,19 +505,19 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
 
     ret = sx1262_write_command(SX1262_CMD_SET_PACKET_PARAMS, packet_params, 6);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Paket Params Update fehlgeschlagen");
+        ESP_LOGE(TAG, "Packet Params Update failed");
         goto cleanup; 
     }
 
-    // TX Mode setzen
+    // Set TX Mode
     uint8_t tx_params[3] = {0x00, 0x00, 0x00}; // No timeout
     ret = sx1262_write_command(SX1262_CMD_SET_TX, tx_params, 3);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "TX Mode setzen fehlgeschlagen");
+        ESP_LOGE(TAG, "Setting TX Mode failed");
         goto cleanup; 
     }
 
-    // Warten auf TX Done
+    // Wait for TX Done
     uint32_t timeout = 5000;
     uint32_t start = xTaskGetTickCount();
     
@@ -542,7 +542,7 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
     ret = ESP_ERR_TIMEOUT;
     
 cleanup:
-    // EINE Stelle für Cleanup!
+    // ONE place for Cleanup!
     xSemaphoreGiveRecursive(sx1262_mutex);
     return ret;
 }
@@ -552,7 +552,7 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
     esp_err_t ret = ESP_OK;
 
     if (!hw_initialized) {
-        ESP_LOGE(TAG, "Hardware nicht initialisiert!");
+        ESP_LOGE(TAG, "Hardware not initialized!");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -560,7 +560,7 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Mutex nehmen (timeout etwas länger als receive timeout)
+    // Take mutex (timeout slightly longer than receive timeout)
     if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(timeout_ms + 1000)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to take mutex for receive");
         return ESP_ERR_TIMEOUT;
@@ -572,10 +572,10 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
         goto cleanup;
     }
 
-    // IRQ Status löschen
+    // Clear IRQ Status
     sx1262_clear_irq_status(0xFFFF);
 
-    // RX Mode setzen
+    // Set RX Mode
     uint8_t rx_params[3];
     if (timeout_ms == 0) {
         // Continuous RX
@@ -592,11 +592,11 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
 
     ret = sx1262_write_command(SX1262_CMD_SET_RX, rx_params, 3);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "RX Mode setzen fehlgeschlagen");
+        ESP_LOGE(TAG, "Setting RX Mode failed");
         goto cleanup;
     }
 
-    // Warten auf RX Done
+    // Wait for RX Done
     uint32_t wait_timeout = timeout_ms == 0 ? 60000 : timeout_ms + 1000;
     uint32_t start = xTaskGetTickCount();
     
@@ -606,7 +606,7 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
         if (irq_status & SX1262_IRQ_RX_DONE) {
             sx1262_clear_irq_status(SX1262_IRQ_RX_DONE);
             
-            // Buffer Status lesen
+            // Read Buffer Status
             uint8_t buffer_status[2];
             ret = sx1262_read_command(SX1262_CMD_GET_RX_BUFFER_STATUS, buffer_status, 2);
             if (ret != ESP_OK) {
@@ -620,24 +620,24 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
                 payload_len = 255;
             }
 
-            // Daten aus Buffer lesen mit der allgemeinen Funktion
-            // Wir brauchen die SPI-Sequenz: [CMD_READ_BUFFER, OFFSET, NOP]
+            // Read data from buffer using the general function
+            // We need the SPI sequence: [CMD_READ_BUFFER, OFFSET, NOP]
             
             uint8_t tx_header[3];
-            tx_header[0] = SX1262_CMD_READ_BUFFER; // Der Befehl
-            tx_header[1] = rx_start_ptr;           // Das Offset
-            tx_header[2] = 0x00;                   // Die NOP
+            tx_header[0] = SX1262_CMD_READ_BUFFER; // The command
+            tx_header[1] = rx_start_ptr;          // The offset
+            tx_header[2] = 0x00;                  // The NOP
             
-            // Lese 'payload_len' Bytes direkt in den 'data'-Puffer
-            // nach Senden des 3-Byte-Headers.
+            // Read 'payload_len' bytes directly into the 'data' buffer
+            // after sending the 3-byte header.
             ret = sx1262_spi_read_general(tx_header, 3, data, payload_len);
 
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "ReadBuffer fehlgeschlagen");
+                ESP_LOGE(TAG, "ReadBuffer failed");
                 goto cleanup; 
             }
 
-            // Kein memcpy() mehr nötig, data wurde direkt befüllt!
+            // No more memcpy() needed, data was filled directly!
             *len = payload_len;
 
             ESP_LOGD(TAG, "RX Done: %d bytes", payload_len);
@@ -675,7 +675,7 @@ cleanup:
 }
 
 // ============================================================================
-// HILFSFUNKTIONEN 
+// HELPER FUNCTIONS 
 // ============================================================================
 
 esp_err_t sx1262_sleep(void)
@@ -713,7 +713,7 @@ esp_err_t sx1262_standby(void)
 
     xSemaphoreGiveRecursive(sx1262_mutex);
     
-    return ret;    
+    return ret;   
 }
 
 int16_t sx1262_get_rssi(void)
@@ -775,7 +775,7 @@ esp_err_t sx1262_get_packet_status(sx1262_packet_status_t *status)
     }
 
 cleanup:
-    // Mutex freigeben
+    // Release mutex
     xSemaphoreGiveRecursive(sx1262_mutex);
     return ret;
 }
@@ -788,15 +788,15 @@ esp_err_t sx1262_get_chip_info(void)
         return ESP_ERR_INVALID_ARG;
     }
     
-    // Mutex nehmen
+    // Take mutex
     if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to take mutex for send");
         return ESP_ERR_TIMEOUT;
     }
 
-    ESP_LOGI(TAG, "=== SX1262 Chip-Informationen ===");
+    ESP_LOGI(TAG, "=== SX1262 Chip Information ===");
     
-    // 1. Status abfragen
+    // 1. Get Status
     uint8_t status[1];
     ret = sx1262_read_command(SX1262_CMD_GET_STATUS, status, 1);
     if (ret == ESP_OK) {
@@ -812,20 +812,20 @@ esp_err_t sx1262_get_chip_info(void)
         ESP_LOGI(TAG, "  Chip Mode: %s", mode_str[chip_mode]);
         ESP_LOGI(TAG, "  Command Status: %s", cmd_str[cmd_status]);
     } else {
-        ESP_LOGE(TAG, "Status-Abfrage fehlgeschlagen - Chip nicht erreichbar!");
+        ESP_LOGE(TAG, "Status query failed - Chip not reachable!");
         goto cleanup; 
     }
     
-    // 2. Paket-Typ auslesen
+    // 2. Read Packet Type
     uint8_t packet_type[1];
     ret = sx1262_read_command(SX1262_CMD_GET_PACKET_TYPE, packet_type, 1);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Paket-Typ: %s", 
+        ESP_LOGI(TAG, "Packet Type: %s", 
                  packet_type[0] == 0x00 ? "GFSK" : 
                  packet_type[0] == 0x01 ? "LoRa" : "Unknown");
     }
     
-    // 3. Random Number Generator Test (prüft ob Chip funktioniert)
+    // 3. Random Number Generator Test (checks if chip is working)
     uint8_t random[4];
     ret = sx1262_read_register(SX1262_REG_RANDOM_NUMBER_GEN, random, 4);
     if (ret == ESP_OK) {
@@ -833,15 +833,15 @@ esp_err_t sx1262_get_chip_info(void)
                        (random[2] << 8) | random[3];
         ESP_LOGI(TAG, "Random Number: 0x%08lX", rnd);
         
-        // Wenn Random = 0 oder 0xFFFFFFFF → Problem
+        // If Random = 0 or 0xFFFFFFFF -> Problem
         if (rnd == 0 || rnd == 0xFFFFFFFF) {
-            ESP_LOGW(TAG, "  ⚠ Verdächtige Random Number - evtl. Chip-Problem");
+            ESP_LOGW(TAG, "  ⚠ Suspicious Random Number - possible chip problem");
         } else {
-            ESP_LOGI(TAG, "  ✓ Chip reagiert korrekt");
+            ESP_LOGI(TAG, "  ✓ Chip is responding correctly");
         }
     }
     
-    // 4. Sync Word auslesen (nur LoRa)
+    // 4. Read Sync Word (LoRa only)
     if (current_config.modem_mode == SX1262_MODEM_LORA) {
         uint8_t sync_msb, sync_lsb;
         ret = sx1262_read_register(SX1262_REG_LORA_SYNC_WORD_MSB, &sync_msb, 1);
@@ -886,7 +886,7 @@ cleanup:
 }
 
 // ============================================================================
-// STATISCHE HILFSFUNKTIONEN 
+// STATIC HELPER FUNCTIONS 
 // ============================================================================
 
 static void sx1262_reset(void)
@@ -913,75 +913,75 @@ static void sx1262_wait_on_busy(void)
 
 static esp_err_t sx1262_write_command(uint8_t cmd, uint8_t *data, uint8_t len)
 {
-    // Der Header ist nur das einzelne Befehls-Byte 'cmd'
-    // Wir übergeben die Adresse von 'cmd' als 1-Byte-Header
+    // The header is just the single command byte 'cmd'
+    // We pass the address of 'cmd' as a 1-byte header
     return sx1262_spi_write_general(&cmd, 1, data, len);
 }
 
 static esp_err_t sx1262_read_command(uint8_t cmd, uint8_t *data, uint8_t len)
 {
-    // [CMD, NOP] senden, 'len' Bytes lesen
+    // Send [CMD, NOP], read 'len' bytes
     uint8_t tx_header[2];
     tx_header[0] = cmd;
     tx_header[1] = 0x00; // NOP
     
-    // Header ist 2 Bytes lang
+    // Header is 2 bytes long
     return sx1262_spi_read_general(tx_header, 2, data, len);
 }
 
 
 static esp_err_t sx1262_write_register(uint16_t addr, uint8_t *data, uint8_t len)
 {
-    // Der Header ist [CMD, ADDR_H, ADDR_L]
+    // The header is [CMD, ADDR_H, ADDR_L]
     uint8_t tx_header[3];
     tx_header[0] = SX1262_CMD_WRITE_REGISTER;
     tx_header[1] = (addr >> 8) & 0xFF;
     tx_header[2] = addr & 0xFF;
     
-    // Header ist 3 Bytes lang
+    // Header is 3 bytes long
     return sx1262_spi_write_general(tx_header, 3, data, len);
 }
 
 static esp_err_t sx1262_read_register(uint16_t addr, uint8_t *data, uint8_t len)
 {
-    // [CMD_READ, ADDR_H, ADDR_L, NOP] senden, 'len' Bytes lesen
+    // Send [CMD_READ, ADDR_H, ADDR_L, NOP], read 'len' bytes
     uint8_t tx_header[4];
     tx_header[0] = SX1262_CMD_READ_REGISTER;
     tx_header[1] = (addr >> 8) & 0xFF;
     tx_header[2] = addr & 0xFF;
     tx_header[3] = 0x00; // NOP
     
-    // Header ist 4 Bytes lang
+    // Header is 4 bytes long
     return sx1262_spi_read_general(tx_header, 4, data, len);
 }
 
 
 /**
- * @brief Allgemeine, flexible SPI-Schreibfunktion
- * * Sendet einen Header variabler Länge, gefolgt von optionalen Daten.
- * Diese Funktion implementiert den korrekten "wait-transmit-wait" Zyklus.
+ * @brief General, flexible SPI write function
+ * Sends a variable-length header, followed by optional data.
+ * This function implements the correct "wait-transmit-wait" cycle.
  *
- * @param tx_header         Buffer mit den zu sendenden Befehls-/Adress-Bytes
- * @param tx_header_len     Anzahl der Bytes im tx_header
- * @param data              Optionale Daten, die nach dem Header gesendet werden
- * @param data_len          Anzahl der optionalen Daten-Bytes
+ * @param tx_header         Buffer with the command/address bytes to be sent
+ * @param tx_header_len     Number of bytes in tx_header
+ * @param data              Optional data sent after the header
+ * @param data_len          Number of optional data bytes
  * @return esp_err_t 
  */
 static esp_err_t sx1262_spi_write_general(uint8_t *tx_header, uint8_t tx_header_len, uint8_t *data, uint8_t data_len)
 {
-    // Wait Nr. 1: Warten, bis der Chip bereit für einen Befehl ist
+    // Wait No. 1: Wait until the chip is ready for a command
     sx1262_wait_on_busy();
     
-    // Gesamtgröße der Transaktion
+    // Total transaction size
     uint8_t total_len = tx_header_len + data_len;
     
-    // Wir brauchen einen einzelnen, zusammenhängenden Puffer für SPI
+    // We need a single, contiguous buffer for SPI
     uint8_t tx_buffer[total_len]; 
     
-    // 1. Header in den Puffer kopieren
+    // 1. Copy header into the buffer
     memcpy(tx_buffer, tx_header, tx_header_len);
     
-    // 2. Optionale Daten in den Puffer kopieren
+    // 2. Copy optional data into the buffer
     if (data != NULL && data_len > 0) {
         memcpy(&tx_buffer[tx_header_len], data, data_len);
     }
@@ -994,7 +994,7 @@ static esp_err_t sx1262_spi_write_general(uint8_t *tx_header, uint8_t tx_header_
     
     esp_err_t ret = spi_device_transmit(spi_handle, &trans);
     
-    // Wait Nr. 2: Warten, bis der Chip die Ausführung des Befehls beendet hat
+    // Wait No. 2: Wait until the chip has finished executing the command
     sx1262_wait_on_busy();
     
     return ret;
@@ -1003,35 +1003,36 @@ static esp_err_t sx1262_spi_write_general(uint8_t *tx_header, uint8_t tx_header_
 
 
 /**
- * @brief Allgemeine, flexible SPI-Lesefunktion
- * * Sendet einen Header variabler Länge (z.B. [CMD] oder [CMD, OFFSET] oder [CMD, ADDR_H, ADDR_L])
- * gefolgt von NOPs, um 'rx_len' Bytes zu empfangen.
- * * @param tx_header         Buffer mit den zu sendenden Befehls-/Adress-Bytes
- * @param tx_header_len     Anzahl der Bytes im tx_header
- * @param rx_data           Ziel-Buffer für die gelesenen Daten
- * @param rx_len            Anzahl der zu lesenden Daten-Bytes
+ * @brief General, flexible SPI read function
+ * Sends a variable-length header (e.g., [CMD] or [CMD, OFFSET] or [CMD, ADDR_H, ADDR_L])
+ * followed by NOPs to receive 'rx_len' bytes.
+ *
+ * @param tx_header         Buffer with the command/address bytes to be sent
+ * @param tx_header_len     Number of bytes in tx_header
+ * @param rx_data           Destination buffer for the read data
+ * @param rx_len            Number of data bytes to read
  * @return esp_err_t 
  */
 static esp_err_t sx1262_spi_read_general(uint8_t *tx_header, uint8_t tx_header_len, uint8_t *rx_data, uint8_t rx_len)
 {
     sx1262_wait_on_busy();
     
-    // Wir brauchen einen Transaktionspuffer, der Header + Lese-Teil aufnehmen kann
-    // Die ESP-IDF SPI-Treiber benötigen Puffer, die für DMA geeignet sind.
-    // Ein statischer Puffer ist hier oft problematisch. Besser ist es,
-    // tx_buffer und rx_buffer dynamisch im Stack zu allozieren.
+    // We need a transaction buffer that can hold the header + read part
+    // The ESP-IDF SPI drivers require buffers suitable for DMA.
+    // A static buffer is often problematic here. It is better to
+    // allocate tx_buffer and rx_buffer dynamically on the stack.
     
     uint8_t tx_buffer[tx_header_len + rx_len];
     uint8_t rx_buffer[tx_header_len + rx_len];
 
-    // 1. Sende-Header kopieren
+    // 1. Copy send header
     memcpy(tx_buffer, tx_header, tx_header_len);
     
-    // 2. Den Rest des Sende-Puffers mit NOPs füllen (optional, 0x00 ist Standard)
+    // 2. Fill the rest of the send buffer with NOPs (optional, 0x00 is default)
     // memset(&tx_buffer[tx_header_len], 0x00, rx_len);
     
     spi_transaction_t trans = {
-        .length = (tx_header_len + rx_len) * 8, // Gesamtlänge in Bits
+        .length = (tx_header_len + rx_len) * 8, // Total length in bits
         .tx_buffer = tx_buffer,
         .rx_buffer = rx_buffer
     };
@@ -1039,7 +1040,7 @@ static esp_err_t sx1262_spi_read_general(uint8_t *tx_header, uint8_t tx_header_l
     esp_err_t ret = spi_device_transmit(spi_handle, &trans);
     
     if (ret == ESP_OK && rx_data != NULL && rx_len > 0) {
-        // Die gelesenen Daten beginnen *nach* dem Header-Teil
+        // The read data starts *after* the header part
         memcpy(rx_data, &rx_buffer[tx_header_len], rx_len);
     }
     
