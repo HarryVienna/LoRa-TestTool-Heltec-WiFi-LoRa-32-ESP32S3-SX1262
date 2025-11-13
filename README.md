@@ -1,9 +1,8 @@
-# LoRa TestTool für Heltec WiFi LoRa 32(V3), ESP32S3 + SX1262
+# LoRa TestTool for Heltec WiFi LoRa 32(V3), ESP32S3 + SX1262
 
-**Interaktives LoRa-Testtool mit OLED-Display und Echtzeit-Parameterkonfiguration**
+**Interactive LoRa test tool with OLED display and real-time parameter configuration**
 
 ![PXL_20251110_092105251_github](https://github.com/user-attachments/assets/1a1c75ff-7fc7-40b1-8ddd-05989fd5cc19)
-
 
 ![ESP32](https://img.shields.io/badge/ESP32-S3-blue) ![LoRa](https://img.shields.io/badge/LoRa-SX1262-green) 
 
@@ -11,109 +10,108 @@
 
 ## Features
 
-✅ **Interaktives Menü** auf 128x64 OLED Display  
-✅ **Intuitive Navigation** mit Short-Click und Long-Press  
-✅ **Live-Konfiguration** aller LoRa-Parameter ohne Neustart  
-✅ **Send-Modus** mit Paket-Zähler und Send-Indikator  
-✅ **Receive-Modus** mit RSSI-Anzeige und Paket-Statistik  
-✅ **Echtzeit-Updates** beim Parameterwechsel  
+✅ **Interactive menu** on 128x64 OLED display  
+✅ **Intuitive navigation** with short-click and long-press  
+✅ **Live configuration** of all LoRa parameters without restart  
+✅ **Send mode** with packet counter and transmit indicator  
+✅ **Receive mode** with RSSI display and packet statistics  
+✅ **Real-time updates** when changing parameters  
 
 ## Hardware
 
 - **Board**: Heltec WiFi LoRa 32 V3.2
 - **Display**: 128x64 OLED (SSD1306)
 - **LoRa**: SX1262 Transceiver
-- **Button**: GPIO 0 (Boot-Button)
+- **Button**: GPIO 0 (Boot button)
 
-⚠️ **Wichtig:** Immer Antenne anschließen!
+⚠️ **Important:** Always connect antenna!
 
 ## Display Layout
 
 ```
 ┌────────────────────────────┐
-│ >Mode: Send           [*]  │ ← Aktiver Menüpunkt (>)
-│  SF: 7                     │   Editier-Modus ([invertiert])
+│ >Mode: Send           [*]  │ ← Active menu item (>)
+│  SF: 7                     │   Edit mode ([inverted])
 │  BW: 125                   │
 │  CR: 4/5                   │
 │  Pwr: 14                   │
-│ ─────────────────────────  │
-│ TX: 42                   * │ ← Status: Pakete + Send-Indikator
+│ ────────────────────────── │
+│ TX: 42                   * │ ← Status: Packets + transmit indicator
 └────────────────────────────┘
 
-Im Receive-Modus:
+In receive mode:
 ┌────────────────────────────┐
 │  Mode: Recv                │
 │  SF: 7                     │
 │  BW: 125                   │
 │  CR: 4/5                   │
 │  Pwr: 14                   │
-│ ─────────────────────────  │
-│ RX:15 RSSI:-85             │ ← Empfangene Pakete + RSSI
+│ ────────────────────────── │
+│ RX:15 RSSI:-85             │ ← Received packets + RSSI
 └────────────────────────────┘
 ```
 
 ## Navigation
 
-### Linke Seite (Menü-Navigation)
+### Left Side (Menu Navigation)
 
 **Short Click (< 500ms)**
-- Springt zum nächsten Menüpunkt
-- Zyklisch: Mode → SF → BW → CR → Power → Mode
+- Jumps to next menu item
+- Cyclic: Mode → SF → BW → CR → Power → Mode
 
 **Long Press (≥ 500ms)**
-- Wechselt in den Editier-Modus (rechte Seite)
-- Der aktuelle Wert wird invertiert dargestellt
+- Switches to edit mode (right side)
+- Current value is displayed inverted
 
-### Rechte Seite (Wert-Editierung)
+### Right Side (Value Editing)
 
 **Short Click (< 500ms)**
-- Wechselt zum nächsten Wert (zyklisch durch Optionen)
-- Aktualisiert **sofort** die LoRa-Konfiguration
+- Changes to next value (cycles through options)
+- Updates LoRa configuration **immediately**
 
 **Long Press (≥ 500ms)**
-- Verlässt den Editier-Modus
-- Kehrt zur Menü-Navigation zurück (linke Seite)
+- Exits edit mode
+- Returns to menu navigation (left side)
 
-## Parameter-Bereiche
+## Parameter Ranges
 
-| Parameter | Werte | Beschreibung |
-|-----------|-------|--------------|
-| **Mode** | Send / Receive | Betriebsmodus |
-| **SF** | 5 - 12 | Spreading Factor (zyklisch) |
-| **BW** | 125 / 250 / 500 | Bandwidth in kHz (zyklisch) |
-| **CR** | 4/5, 4/6, 4/7, 4/8 | Coding Rate (zyklisch) |
-| **TX Power** | -9 bis +22 | Sendeleistung in dBm (zyklisch) |
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| **Mode** | Send / Receive | Operating mode |
+| **SF** | 5 - 12 | Spreading Factor (cyclic) |
+| **BW** | 125 / 250 / 500 | Bandwidth in kHz (cyclic) |
+| **CR** | 4/5, 4/6, 4/7, 4/8 | Coding Rate (cyclic) |
+| **TX Power** | -9 to +22 | Transmit power in dBm (cyclic) |
 
-## Betriebsmodi
+## Operating Modes
 
-### Send-Modus
-- Sendet alle 2 Sekunden ein Paket
-- Paketinhalt: `"PKT:42 SF:7 BW:125"` (mit Counter)
-- Display zeigt:
-  - `TX: 42` → Anzahl gesendeter Pakete
-  - `*` → Blinkt beim Senden
+### Send Mode
+- Transmits a packet every 2 seconds
+- Packet content: `"PKT:42 SF:7 BW:125"` (with counter)
+- Display shows:
+  - `TX: 42` → Number of transmitted packets
+  - `*` → Blinks when transmitting
 
-### Receive-Modus
-- Hört kontinuierlich auf LoRa-Pakete
-- Display zeigt:
-  - `RX:15` → Anzahl empfangener Pakete
-  - `RSSI:-85` → Signalstärke des letzten Pakets
-  - `Waiting...` → Wenn noch nichts empfangen
+### Receive Mode
+- Continuously listens for LoRa packets
+- Display shows:
+  - `RX:15` → Number of received packets
+  - `RSSI:-85` → Signal strength of last packet
+  - `Waiting...` → When nothing received yet
 
-## Projektstruktur
-
+## Project Structure
 
 ```
 lora-testtool/
 ├── main/
-│   ├── main.c              # Hauptprogramm
-│   ├── lora_testtool.c     # Testtool-Logik
+│   ├── main.c              # Main program
+│   ├── lora_testtool.c     # Test tool logic
 │   └── lora_testtool.h
 ├── components/
-│   ├── button/             # Button-Handler
+│   ├── button/             # Button handler
 │   │   ├── button.c
 │   │   └── button.h
-│   └── sx1262/             # LoRa-Treiber
+│   └── sx1262/             # LoRa driver
 │       ├── sx1262.c
 │       └── sx1262.h
 └── CMakeLists.txt
@@ -121,70 +119,69 @@ lora-testtool/
 
 ### Dependencies
 
-Das Projekt benötigt:
-- ✅ **button** - Button-Library (bereits vorhanden)
-- ✅ **sx1262** - Dein LoRa-Treiber (bereits vorhanden)
-- 📦 **u8g2** - Display-Library ([u8g2](https://github.com/olikraus/u8g2))
-- 📦 **u8g2_hal_esp32** - Display-Library ESP32 HAL([u8g2_hal_esp32](https://github.com/mkfrey/u8g2-hal-esp-idf))
+The project requires:
+- ✅ **button** - Button library (already included)
+- ✅ **sx1262** - Your LoRa driver (already included)
+- 📦 **u8g2** - Display library ([u8g2](https://github.com/olikraus/u8g2))
+- 📦 **u8g2_hal_esp32** - Display library ESP32 HAL ([u8g2_hal_esp32](https://github.com/mkfrey/u8g2-hal-esp-idf))
 
+## Technical Details
 
-## Technische Details
+### Task Architecture
 
-### Task-Architektur
+The tool creates 3 tasks:
 
-Das Tool erstellt 3 Tasks:
-
-1. **Button Task** (Priorität 1)
-   - Überwacht GPIO 0
-   - Debouncing, Double-Click-Erkennung
+1. **Button Task** (Priority 1)
+   - Monitors GPIO 0
+   - Debouncing, double-click detection
    - Stack: 2 KB
 
-2. **LoRa Send Task** (Priorität 5)
-   - Sendet Pakete im Send-Modus
-   - Intervall: 2 Sekunden
+2. **LoRa Send Task** (Priority 5)
+   - Transmits packets in send mode
+   - Interval: 2 seconds
    - Stack: 4 KB
 
-3. **LoRa Receive Task** (Priorität 5)
-   - Empfängt Pakete im Receive-Modus
-   - Non-blocking mit 100ms Timeout
+3. **LoRa Receive Task** (Priority 5)
+   - Receives packets in receive mode
+   - Non-blocking with 100ms timeout
    - Stack: 4 KB
 
-### Latenz
+### Latency
 
-- Display-Update: ~50ms
-- Parameter-Änderung: ~100ms (inkl. LoRa-Rekonfiguration)
-- Button-Reaktion: 10-420ms (abhängig von Double-Click)
+- Display update: ~50ms
+- Parameter change: ~100ms (including LoRa reconfiguration)
+- Button response: 10-420ms (depending on double-click detection)
 
-## Anpassungen
+## Customization
 
-### Sendeintervall ändern
+### Change Transmit Interval
 
 In `lora_testtool.c`:
 ```c
-#define SEND_INTERVAL_MS    2000  // Ändere auf gewünschten Wert
+#define SEND_INTERVAL_MS    2000  // Change to desired value
 ```
 
-### Frequenz ändern
+### Change Frequency
 
 In `update_lora_config()`:
 ```c
-.frequency = 868000000,  // Ändere auf deine ISM-Band-Frequenz
+.frequency = 868000000,  // Change to your ISM band frequency
 ```
 
-### Weitere Parameter hinzufügen
+### Add More Parameters
 
-1. Enum `menu_item_t` erweitern
-2. State `menu_state_t` erweitern
-3. `draw_menu_item()` Aufruf in `update_display()` hinzufügen
-4. Case in `menu_next_value()` hinzufügen
-5. `update_lora_config()` anpassen
+1. Extend enum `menu_item_t`
+2. Extend state `menu_state_t`
+3. Add `draw_menu_item()` call in `update_display()`
+4. Add case in `menu_next_value()`
+5. Adapt `update_lora_config()`
 
-## Timing-Diagramm
+## Timing Diagram
 
-### Send-Modus Ablauf
+### Send Mode Flow
 
 ```
-Zeit: 0s      2s      4s      6s
+Time: 0s      2s      4s      6s
       ↓       ↓       ↓       ↓
 Send: ████    ████    ████    ████
       ↑       ↑       ↑       ↑
@@ -195,12 +192,12 @@ Display:
       *       *       *       *
 ```
 
-### Receive-Modus Ablauf
+### Receive Mode Flow
 
 ```
-Zeit: 0s         RX        RX           RX
+Time: 0s         RX        RX           RX
       ↓          ↓         ↓            ↓
-Recv: ─────────███────────███─────────███
+Recv: ─────────███───────███─────────███
       ↑         ↑         ↑            ↑
       Waiting   RSSI:-85  RSSI:-82     RSSI:-90
 
@@ -208,8 +205,9 @@ Display:
       Waiting   RX:1      RX:2         RX:3
                 RSSI:-85  RSSI:-82     RSSI:-90
 ```
+
 ## Links
 
-- [ESP-IDF Dokumentation](https://docs.espressif.com/projects/esp-idf/)
-- [SX1262 Datenblatt](https://www.semtech.com/products/wireless-rf/lora-core/sx1262)
-- [LoRa Grundlagen](https://www.semtech.com/lora/resources/lora-community/)
+- [ESP-IDF Documentation](https://docs.espressif.com/projects/esp-idf/)
+- [SX1262 Datasheet](https://www.semtech.com/products/wireless-rf/lora-core/sx1262)
+- [LoRa Basics](https://www.semtech.com/lora/resources/lora-community/)
