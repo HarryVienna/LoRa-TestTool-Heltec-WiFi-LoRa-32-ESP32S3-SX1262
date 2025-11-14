@@ -3,13 +3,10 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <string.h>
 
 static const char *TAG = "SX1262";
-
-static SemaphoreHandle_t sx1262_mutex = NULL;
 
 // Global variables
 static spi_device_handle_t spi_handle;
@@ -42,16 +39,6 @@ esp_err_t sx1262_init(void)
     esp_err_t ret;
 
     ESP_LOGI(TAG, "Hardware initialization...");
-
-    // Create mutex
-    if (sx1262_mutex == NULL) {
-        sx1262_mutex = xSemaphoreCreateRecursiveMutex();
-        if (sx1262_mutex == NULL) {
-            ESP_LOGE(TAG, "Failed to create mutex");
-            return ESP_FAIL;
-        }
-        ESP_LOGI(TAG, "Mutex created successfully");
-    }
 
     // GPIO Configuration
     gpio_config_t io_conf = {
@@ -183,14 +170,8 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (!config || !sx1262_mutex) {
+    if (!config) {
         return ESP_ERR_INVALID_ARG;
-    }
-
-    // Take mutex (wait max 5 seconds)
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for configure");
-        return ESP_ERR_TIMEOUT;
     }
 
     ESP_LOGI(TAG, "Configuring LoRa Parameters...");
@@ -202,7 +183,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_standby();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Standby failed");
-        goto cleanup;
+        return ret;
     }
 
     // 1. Set Packet Type (LoRa or FSK)
@@ -211,7 +192,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_write_command(SX1262_CMD_SET_PACKET_TYPE, &packet_type, 1);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Setting Packet Type failed");
-        goto cleanup;
+        return ret;
     }
 
     // 2. Set RF Frequency
@@ -225,7 +206,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_write_command(SX1262_CMD_SET_RF_FREQUENCY, freq_params, 4);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Setting Frequency failed");
-        goto cleanup;
+        return ret;
     }
 
     // 3. Set PA Config
@@ -235,13 +216,13 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_read_register(SX1262_REG_TX_CLAMP_CFG, &tx_clamp_cfg, 1);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "TX_CLAMP_CFG Read failed");
-        goto cleanup;
+        return ret;
     }
     tx_clamp_cfg = tx_clamp_cfg | 0x1E;
     ret = sx1262_write_register(SX1262_REG_TX_CLAMP_CFG, &tx_clamp_cfg, 1);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "TX_CLAMP_CFG Read failed");
-        goto cleanup;
+        return ret;
     }
 
     uint8_t pa_config[4];
@@ -275,7 +256,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_write_command(SX1262_CMD_SET_PA_CONFIG, pa_config, 4);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "PA Config failed");
-        goto cleanup;
+        return ret;
     }
     
     // Set OCP
@@ -291,7 +272,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_write_register(SX1262_REG_OCP_CONFIGURATION, &ocp_value, 1);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Setting OCP failed");
-        goto cleanup;
+        return ret;
     }
 
     // 4. Set TX Params
@@ -302,7 +283,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_write_command(SX1262_CMD_SET_TX_PARAMS, tx_params, 2);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Setting TX Params failed");
-        goto cleanup;
+        return ret;
     }
 
     // 5. Set Modulation Params
@@ -335,7 +316,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Modulation Params failed");
-        goto cleanup;
+        return ret;
     }
 
     // 6. Set Packet Params
@@ -372,7 +353,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Packet Params failed");
-        goto cleanup;
+        return ret;
     }
 
     // 7. Set Sync Word (LoRa only, optional)
@@ -383,13 +364,13 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         ret = sx1262_write_register(SX1262_REG_LORA_SYNC_WORD_MSB, &sync_word_msb, 1);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Setting Sync Word MSB failed");
-            goto cleanup;
+            return ret;
         }
         
         ret = sx1262_write_register(SX1262_REG_LORA_SYNC_WORD_LSB, &sync_word_lsb, 1);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Setting Sync Word LSB failed");
-            goto cleanup;
+            return ret;
         }
         
         ESP_LOGI(TAG, "Sync Word set: 0x%04X", config->sync_word);
@@ -400,7 +381,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
     ret = sx1262_write_command(SX1262_CMD_SET_BUFFER_BASE_ADDRESS, buffer_params, 2);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Buffer Base Address failed");
-        goto cleanup;
+        return ret;
     }
 
     // 9. Configure IRQ
@@ -409,7 +390,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
                                    0x0000, 0x0000);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "IRQ Config failed");
-        goto cleanup;
+        return ret;
     }
 
     // 10. Set RX Gain
@@ -418,7 +399,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         ret = sx1262_write_register(SX1262_REG_RX_GAIN, &rx_gain_boosted, 1);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Setting RX Gain Boosted failed");
-            goto cleanup;
+            return ret;
         } else {
             ESP_LOGI(TAG, "RX Gain: Boosted");
         }
@@ -427,7 +408,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         ret = sx1262_write_register(SX1262_REG_RX_GAIN, &rx_gain_power_save, 1);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Setting RX Gain Power Save failed");
-            goto cleanup;
+            return ret;
         } else {
             ESP_LOGI(TAG, "RX Gain: Power Save");
         }
@@ -441,9 +422,6 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
              config->coding_rate,
              config->tx_power);    
 
-cleanup:
-    // Release mutex
-    xSemaphoreGiveRecursive(sx1262_mutex);
     return ret;
 }
 
@@ -460,26 +438,20 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (data == NULL || len == 0 || len > 255 || !sx1262_mutex) {
+    if (data == NULL || len == 0 || len > 255) {
         return ESP_ERR_INVALID_ARG;
-    }
-
-    // Take mutex
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for send");
-        return ESP_ERR_TIMEOUT;
     }
 
     // Standby Mode
     ret = sx1262_standby();
     if (ret != ESP_OK) {
-        goto cleanup; 
+        return ret; 
     }
 
     // Clear IRQ Status
     ret = sx1262_clear_irq_status(0xFFFF);
     if (ret != ESP_OK) {
-        goto cleanup; 
+        return ret; 
     }
 
     // Write data to buffer
@@ -491,7 +463,7 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
     ret = sx1262_write_command(SX1262_CMD_WRITE_BUFFER, buffer, len + 1);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Writing buffer failed");
-        goto cleanup; 
+        return ret;
     }
 
     // Update packet parameters with current length
@@ -506,7 +478,7 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
     ret = sx1262_write_command(SX1262_CMD_SET_PACKET_PARAMS, packet_params, 6);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Packet Params Update failed");
-        goto cleanup; 
+        return ret; 
     }
 
     // Set TX Mode
@@ -514,7 +486,7 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
     ret = sx1262_write_command(SX1262_CMD_SET_TX, tx_params, 3);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Setting TX Mode failed");
-        goto cleanup; 
+        return ret;
     }
 
     // Wait for TX Done
@@ -526,12 +498,12 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
         if (irq_status & SX1262_IRQ_TX_DONE) {
             ret = sx1262_clear_irq_status(SX1262_IRQ_TX_DONE);
             if (ret != ESP_OK) {
-                goto cleanup; 
+                return ret; 
             }
 
             ESP_LOGD(TAG, "TX Done");
             ret = ESP_OK;
-            goto cleanup;
+            return ret;
         }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
@@ -541,9 +513,6 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
     // Timeout
     ret = ESP_ERR_TIMEOUT;
     
-cleanup:
-    // ONE place for Cleanup!
-    xSemaphoreGiveRecursive(sx1262_mutex);
     return ret;
 }
 
@@ -556,20 +525,14 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
         return ESP_ERR_INVALID_STATE;
     }
 
-     if (data == NULL || len == NULL || !sx1262_mutex) {
+    if (data == NULL || len == NULL) {
         return ESP_ERR_INVALID_ARG;
-    }
-
-    // Take mutex (timeout slightly longer than receive timeout)
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(timeout_ms + 1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for receive");
-        return ESP_ERR_TIMEOUT;
     }
 
     // Standby Mode
     ret = sx1262_standby();
     if (ret != ESP_OK) {
-        goto cleanup;
+        return ret;
     }
 
     // Clear IRQ Status
@@ -593,7 +556,7 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
     ret = sx1262_write_command(SX1262_CMD_SET_RX, rx_params, 3);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Setting RX Mode failed");
-        goto cleanup;
+        return ret;
     }
 
     // Wait for RX Done
@@ -610,7 +573,7 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
             uint8_t buffer_status[2];
             ret = sx1262_read_command(SX1262_CMD_GET_RX_BUFFER_STATUS, buffer_status, 2);
             if (ret != ESP_OK) {
-                goto cleanup;
+                return ret;
             }
 
             uint8_t payload_len = buffer_status[0];
@@ -634,7 +597,7 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
 
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "ReadBuffer failed");
-                goto cleanup; 
+                return ret;
             }
 
             // No more memcpy() needed, data was filled directly!
@@ -642,7 +605,7 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
 
             ESP_LOGD(TAG, "RX Done: %d bytes", payload_len);
             ret = ESP_OK;
-            goto cleanup;
+            return ret;
 
         }
         
@@ -650,18 +613,18 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
             sx1262_clear_irq_status(SX1262_IRQ_TIMEOUT);
             ESP_LOGD(TAG, "RX Timeout");
             ret = ESP_ERR_TIMEOUT;
-            goto cleanup;
+            return ret;
         }
         
         if (irq_status & SX1262_IRQ_CRC_ERROR) {
             ret = sx1262_clear_irq_status(SX1262_IRQ_CRC_ERROR);
             if (ret != ESP_OK) {
-                goto cleanup; 
+                return ret;
             }
 
             ESP_LOGW(TAG, "CRC Error");
             ret = ESP_FAIL;
-            goto cleanup;
+            return ret;
         }
         
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -669,8 +632,6 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
 
     ret = ESP_ERR_TIMEOUT;
 
-cleanup:
-    xSemaphoreGiveRecursive(sx1262_mutex);
     return ret;
 }
 
@@ -680,53 +641,22 @@ cleanup:
 
 esp_err_t sx1262_sleep(void)
 {
-    if (!sx1262_mutex) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for sleep");
-        return ESP_ERR_TIMEOUT;
-    }
-
     uint8_t sleep_config = 0x04; // Warm start
     esp_err_t ret = sx1262_write_command(SX1262_CMD_SET_SLEEP, &sleep_config, 1);
-
-    xSemaphoreGiveRecursive(sx1262_mutex);
     
     return ret;
 }
 
 esp_err_t sx1262_standby(void)
 {
-    if (!sx1262_mutex) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for standby");
-        return ESP_ERR_TIMEOUT;
-    }
-
     uint8_t standby_config = 0x01; // STDBY_XOSC
     esp_err_t ret = sx1262_write_command(SX1262_CMD_SET_STANDBY, &standby_config, 1);
-
-    xSemaphoreGiveRecursive(sx1262_mutex);
     
     return ret;   
 }
 
 int16_t sx1262_get_rssi(void)
 {
-    if (!sx1262_mutex) {
-        return -999;
-    }
-
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for rssi");
-        return -999;
-    }
-
     uint8_t rssi_data[1];
     esp_err_t ret = sx1262_read_command(SX1262_CMD_GET_RSSI_INST, rssi_data, 1);
     
@@ -737,7 +667,6 @@ int16_t sx1262_get_rssi(void)
         rssi = -(int16_t)(rssi_data[0]) / 2;
     }
     
-    xSemaphoreGiveRecursive(sx1262_mutex);
     return rssi;
 }
 
@@ -745,21 +674,15 @@ esp_err_t sx1262_get_packet_status(sx1262_packet_status_t *status)
 {
     esp_err_t ret = ESP_OK;
 
-    if (status == NULL || !sx1262_mutex) {
+    if (status == NULL) {
         return ESP_ERR_INVALID_ARG;
-    }
-
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for packet status");
-        return ESP_ERR_TIMEOUT;
     }
 
     uint8_t pkt_status[3];
     ret = sx1262_read_command(SX1262_CMD_GET_PACKET_STATUS, pkt_status, 3);
     
     if (ret != ESP_OK) {
-        goto cleanup;
-
+        return ret;
     }
 
     if (current_config.modem_mode == SX1262_MODEM_LORA) {
@@ -774,25 +697,13 @@ esp_err_t sx1262_get_packet_status(sx1262_packet_status_t *status)
         status->signal_rssi = 0;
     }
 
-cleanup:
-    // Release mutex
-    xSemaphoreGiveRecursive(sx1262_mutex);
+    
     return ret;
 }
 
 esp_err_t sx1262_get_chip_info(void)
 {
     esp_err_t ret;
-
-    if (!sx1262_mutex) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    
-    // Take mutex
-    if (xSemaphoreTakeRecursive(sx1262_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take mutex for send");
-        return ESP_ERR_TIMEOUT;
-    }
 
     ESP_LOGI(TAG, "=== SX1262 Chip Information ===");
     
@@ -813,7 +724,7 @@ esp_err_t sx1262_get_chip_info(void)
         ESP_LOGI(TAG, "  Command Status: %s", cmd_str[cmd_status]);
     } else {
         ESP_LOGE(TAG, "Status query failed - Chip not reachable!");
-        goto cleanup; 
+        return ret;
     }
     
     // 2. Read Packet Type
@@ -880,8 +791,6 @@ esp_err_t sx1262_get_chip_info(void)
     
     ESP_LOGI(TAG, "=================================\n");
     
-cleanup:
-    xSemaphoreGiveRecursive(sx1262_mutex);
     return ret;
 }
 

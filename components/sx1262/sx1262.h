@@ -229,6 +229,9 @@ typedef struct {
  * - Caller must ensure required system resources (SPI bus, GPIOs) are available.
  * - Behavior for repeated calls is component-defined; check corresponding deinit
  *   or reinit semantics if multiple init calls are needed.
+ * - **NOT thread-safe**: This driver is NOT thread-safe. Caller must serialize all
+ *   sx1262_* function calls (init, configure, send, receive) using external
+ *   synchronization if concurrent access from multiple tasks is possible.
  *
  * @see sx1262_deinit(), sx1262_send(), sx1262_receive()
  */
@@ -268,9 +271,9 @@ esp_err_t sx1262_init(void);
  *   complete depending on the operations required.
  * - The implementation may temporarily change the radio mode (for example,
  *   place the device in standby) in order to apply certain settings.
- * - The caller should ensure exclusive access to the radio while calling
- *   this function (i.e. do not attempt concurrent operations via other
- *   threads without synchronization).
+ * - **NOT thread-safe**: Caller must ensure exclusive access to the radio
+ *   while calling this function and any concurrent sx1262_* operations.
+ *   Use external synchronization (mutex, task serialization) if needed.
  * - Invalid or unsupported field combinations in the configuration may be
  *   rejected even if individual values are within range.
  *
@@ -291,24 +294,24 @@ esp_err_t sx1262_configure(const sx1262_config_t *config);
  *
  * @param[in] data Pointer to the buffer containing the bytes to send. Must be
  *                 non-NULL if len > 0.
- * @param[in] len  Number of bytes to transmit. Must not exceed the radio's
- *                 maximum payload size (implementation-defined).
+ * @param[in] len  Number of bytes to transmit. Maximum payload size is 255 bytes.
  *
  * @return
  *  - ESP_OK on successful transmission.
- *  - ESP_ERR_INVALID_ARG if 'data' is NULL while 'len' > 0 or if 'len' is invalid.
+ *  - ESP_ERR_INVALID_ARG if 'data' is NULL while 'len' > 0, if 'len' is zero, or if 'len' > 255.
  *  - ESP_ERR_INVALID_STATE if the SX1262 driver/module has not been initialized.
- *  - ESP_ERR_TIMEOUT if the transmission timed out.
+ *  - ESP_ERR_TIMEOUT if the transmission timed out (5 second hard timeout).
  *  - ESP_FAIL for other hardware or protocol errors.
  *
  * @note
  *  - The caller is responsible for ensuring the SX1262 has been initialized
  *    before calling this function.
  *  - This function may block while the radio performs the transmission and
- *    typically uses SPI/GPIO; do not call from an ISR. Serialize concurrent
- *    calls (e.g., with a mutex) as the implementation may not be thread-safe.
- *  - The implementation may copy the provided buffer or reference it directly;
- *    callers should not modify or free 'data' until this function returns.
+ *    typically uses SPI/GPIO; do not call from an ISR.
+ *  - **NOT thread-safe**: Serialize concurrent calls (e.g., with a mutex) or
+ *    ensure exclusive access to the radio as the implementation is not thread-safe.
+ *  - The function copies the provided buffer internally; callers may modify
+ *    or free 'data' immediately after this function returns.
  */
 esp_err_t sx1262_send(uint8_t *data, uint8_t len);
 
@@ -318,22 +321,26 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len);
  * Blocks until a packet is received or the specified timeout elapses. The
  * received payload is copied into the buffer pointed to by @p data.
  *
- * @param[out] data Pointer to a buffer that will receive the payload bytes.
- * @param[in,out] len On input: size of the buffer (maximum number of bytes that can be written).
+ * @param[out] data Pointer to a buffer that will receive the payload bytes. Must be non-NULL.
+ * @param[in,out] len On input: pointer to buffer size (maximum number of bytes that can be written).
  *                    On output: number of bytes actually written into @p data.
- * @param[in] timeout_ms Maximum time to wait for a packet, in milliseconds. If zero, the call
- *                       returns immediately (non-blocking behaviour).
+ *                    Must be non-NULL.
+ * @param[in] timeout_ms Maximum time to wait for a packet, in milliseconds.
+ *                       - If zero: Continuous RX mode with 60-second hard timeout.
+ *                       - If non-zero: RX with specified timeout plus 1 second margin.
  *
  * @return ESP_OK          Packet received and copied to @p data; @p len updated with received length.
- * @return ESP_ERR_TIMEOUT No packet received before @p timeout_ms elapsed.
- * @return ESP_ERR_INVALID_ARG One or more of the pointers (@p data or @p len) are NULL or @p *len is zero.
- * @return ESP_ERR_NO_MEM   Provided buffer was too small to hold the incoming packet (packet may be truncated).
+ * @return ESP_ERR_TIMEOUT No packet received before timeout elapsed or timeout occurred.
+ * @return ESP_ERR_INVALID_ARG @p data or @p len pointers are NULL.
+ * @return ESP_ERR_CRC_ERROR Received packet has CRC error.
  * @return ESP_FAIL        Radio/hardware error or other unrecoverable condition.
  *
- * @note Caller must provide a buffer large enough for the expected payload. If the incoming packet
- *       exceeds the provided buffer size, behaviour may be truncated or an error returned as above.
- * @note This function is intended for task context and is not safe for use in interrupt handlers.
- * @note The exact set of esp_err_t values returned may depend on the lower-level radio driver state.
+ * @note
+ *  - Caller must provide a buffer large enough for the incoming packet. There is NO buffer
+ *    overflow protection; if the received packet exceeds the buffer size, data will be truncated.
+ *  - This function is intended for task context and is NOT safe for use in interrupt handlers.
+ *  - **NOT thread-safe**: Serialize concurrent calls or ensure exclusive access to the radio.
+ *  - Maximum packet size is 255 bytes (SX1262 hardware limit).
  */
 esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms);
 
@@ -361,19 +368,19 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms);
  * @retval ESP_ERR_TIMEOUT A timeout occurred waiting for the device to acknowledge the command.
  * @retval ESP_FAIL Communication with the device failed or an unspecified error occurred.
  *
- * @note After putting the SX1262 to sleep you must wake it (for example with
- * sx1262_wakeup() or a hardware reset) and reconfigure any volatile radio
- * parameters required by your application before attempting radio operations.
+ * @note After putting the SX1262 to sleep, the radio must be brought back to
+ * active mode (e.g., via sx1262_standby() or similar) and may require reconfiguration
+ * of volatile radio parameters before attempting radio operations.
+ * @note **NOT thread-safe**: Serialize concurrent calls or ensure exclusive access to the radio.
  */
 esp_err_t sx1262_sleep(void);
 
 /**
  * @brief Put the SX1262 transceiver into standby mode.
  *
- * Transition the radio to a low-power standby state while preserving its
+ * Transition the radio to a low-power standby state (STDBY_XOSC) while preserving its
  * configuration and registers. This function sends the appropriate command
- * to the device over the configured SPI bus and (optionally) waits for the
- * device to acknowledge the state change.
+ * to the device over the configured SPI bus.
  *
  * @return esp_err_t
  *         - ESP_OK: The command was accepted and the device entered standby.
@@ -383,6 +390,7 @@ esp_err_t sx1262_sleep(void);
  * @note If the radio is performing a time-critical operation (e.g. TX/RX),
  *       calling this function may abort that operation. Ensure it is safe to
  *       move the device to standby before calling.
+ * @note **NOT thread-safe**: Serialize concurrent calls or ensure exclusive access to the radio.
  */
 esp_err_t sx1262_standby(void);
 
@@ -397,15 +405,14 @@ esp_err_t sx1262_standby(void);
  *  - The SX1262 must be initialized.
  *  - RSSI is meaningful when the radio is in receive mode or immediately after a packet has
  *    been received; calling this while the radio is inactive may return an undefined value.
- *
- * Threading/side-effects:
- *  - This function should not change the radio operating state.
- *  - Ensure exclusive access to the radio hardware if concurrent access is possible in your system.
+ *  - Returns -999 on error (e.g., if read fails).
  *
  * @return int16_t
- *   RSSI in dBm (signed 16-bit). The interpretation of the return value is in decibels
- *   relative to one milliwatt (dBm). If a valid measurement is not available, the returned
- *   value is implementation-defined/undefined.
+ *   RSSI in dBm (signed 16-bit) representing decibels relative to one milliwatt.
+ *   Special value: -999 indicates an error or unavailable measurement.
+ *
+ * @note This function should not change the radio operating state.
+ * @note **NOT thread-safe**: Serialize concurrent calls or ensure exclusive access to the radio.
  */
 int16_t sx1262_get_rssi(void);
 
@@ -417,13 +424,14 @@ int16_t sx1262_get_rssi(void);
  * relevant packet metrics.
  * 
  * @param[out] status Pointer to sx1262_packet_status_t structure where the
- *                    packet status will be stored
+ *                    packet status will be stored. Must be non-NULL.
  * 
  * @return ESP_OK on success
  * @return ESP_ERR_INVALID_ARG if status pointer is NULL
- * @return Other ESP error codes on failure
+ * @return ESP_FAIL on communication error or other failure
  * 
- * @note The status structure should be allocated by the caller
+ * @note The status structure should be allocated by the caller.
+ * @note **NOT thread-safe**: Serialize concurrent calls or ensure exclusive access to the radio.
  */
 esp_err_t sx1262_get_packet_status(sx1262_packet_status_t *status);
 
@@ -431,19 +439,20 @@ esp_err_t sx1262_get_packet_status(sx1262_packet_status_t *status);
  * @brief Retrieve SX1262 transceiver chip information.
  *
  * Query the attached SX1262 radio over the driver's transport (e.g. SPI)
- * to read identification and status registers. The retrieved information is
- * expected to be stored in the driver's internal chip-info data structure.
+ * to read identification, status registers, and configuration. The retrieved
+ * information is logged to the console via ESP_LOGI. This is primarily a
+ * diagnostic/debug function.
  *
  * This function takes no parameters and must be called after the SX1262
  * driver has been initialized. It may perform blocking I/O and therefore
  * should not be called from an interrupt context.
  *
  * @note Calling this function when the device or driver is uninitialized
- * may return an error. The exact contents filled and where they are stored
- * depend on the driver implementation.
+ * may return an error. Output is sent to the ESP logging system.
+ * @note **NOT thread-safe**: Serialize concurrent calls or ensure exclusive access to the radio.
  *
  * @return esp_err_t
- * @retval ESP_OK               Chip information successfully read and stored
+ * @retval ESP_OK               Chip information successfully read and displayed
  * @retval ESP_ERR_TIMEOUT      Communication with the SX1262 timed out
  * @retval ESP_ERR_INVALID_STATE Driver or device is not initialized
  * @retval ESP_FAIL             Generic failure (communication/protocol error)

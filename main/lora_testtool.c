@@ -74,6 +74,7 @@ static u8g2_t u8g2;
 static button_handle_t* button;
 static TaskHandle_t lora_task_handle = NULL;
 static SemaphoreHandle_t display_mutex = NULL;
+static SemaphoreHandle_t lora_mutex = NULL;
 static volatile bool display_needs_update = false;
 
 // ============================================================================
@@ -243,6 +244,11 @@ static void request_display_update(void) {
  */
 static void update_lora_config(void) {
     
+    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Could not take LoRa mutex for config");
+        return;
+    }
+
     sx1262_config_t config = {
         .modem_mode = SX1262_MODEM_LORA,
         .frequency = 868000000,  // 868 MHz
@@ -265,7 +271,8 @@ static void update_lora_config(void) {
         ESP_LOGI(TAG, "LoRa configured: SF%d BW%d CR%s Power%d", 
                  menu.sf, menu.bw, cr_to_string(menu.cr), menu.tx_power);
     }
-    
+
+    xSemaphoreGive(lora_mutex);
 }
 
 /**
@@ -284,15 +291,22 @@ static void lora_send_task(void* parameter) {
             menu.is_sending = true;
             request_display_update();
         
-            esp_err_t err = sx1262_send(packet, strlen((char*)packet));
-            
-            if (err == ESP_OK) {
-                menu.packets_sent++;
-                ESP_LOGI(TAG, "Sent packet #%lu", menu.packets_sent);
+            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+
+                esp_err_t err = sx1262_send(packet, strlen((char*)packet));
+
+                xSemaphoreGive(lora_mutex);
+                
+                if (err == ESP_OK) {
+                    menu.packets_sent++;
+                    ESP_LOGI(TAG, "Sent packet #%lu", menu.packets_sent);
+                } else {
+                    ESP_LOGE(TAG, "Send failed: %s", esp_err_to_name(err));
+                }
             } else {
-                ESP_LOGE(TAG, "Send failed: %s", esp_err_to_name(err));
+                ESP_LOGW(TAG, "Could not take LoRa mutex for send");
             }
-            
+
             menu.is_sending = false;
             request_display_update();
             
@@ -312,36 +326,40 @@ static void lora_receive_task(void* parameter) {
     
     while (true) {
         if (menu.mode == MODE_RECEIVE) {
-            esp_err_t err = sx1262_receive(packet, &len, 100);
+            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+
+                esp_err_t err = sx1262_receive(packet, &len, 100);
             
-            if (err == ESP_OK && len > 0) {
-                menu.packets_received++;
+                if (err == ESP_OK && len > 0) {
+                    menu.packets_received++;
 
-                // Turn on LED
-                gpio_set_level(LED_PIN, 1);  // ON
+                    // Turn on LED
+                    gpio_set_level(LED_PIN, 1);  // ON
 
-                menu.last_packet_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
-                
-                // Read RSSI
-                sx1262_packet_status_t status;
-                if (sx1262_get_packet_status(&status) == ESP_OK) {
-                    menu.last_rssi = status.rssi_pkt;
-                    ESP_LOGI(TAG, "RX #%lu: %d bytes, RSSI:%d, SNR:%.1f", 
-                             menu.packets_received, len, 
-                             status.rssi_pkt, status.snr_pkt);
-                }
-                
-                // Update display
-                request_display_update();
-                
-                // Print packet
-                packet[len] = '\0';
-                ESP_LOGI(TAG, "Data: %s", packet);
+                    menu.last_packet_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+                    
+                    // Read RSSI
+                    sx1262_packet_status_t status;
+                    if (sx1262_get_packet_status(&status) == ESP_OK) {
+                        menu.last_rssi = status.rssi_pkt;
+                        ESP_LOGI(TAG, "RX #%lu: %d bytes, RSSI:%d, SNR:%.1f", 
+                                menu.packets_received, len, 
+                                status.rssi_pkt, status.snr_pkt);
+                    }
+                    
+                    // Update display
+                    request_display_update();
+                    
+                    // Print packet
+                    packet[len] = '\0';
+                    ESP_LOGI(TAG, "Data: %s", packet);
 
-                // Turn off LED after 100ms
-                vTaskDelay(pdMS_TO_TICKS(100));
-                gpio_set_level(LED_PIN, 0);
-            }      
+                    // Turn off LED after 100ms
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    gpio_set_level(LED_PIN, 0);
+                }  
+                xSemaphoreGive(lora_mutex);
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -559,13 +577,6 @@ static esp_err_t init_display(u8g2_t* display) {
     // Take over display pointer
     memcpy(&u8g2, display, sizeof(u8g2_t));
     
-    // Create mutex for thread-safe display access
-    display_mutex = xSemaphoreCreateMutex();
-    if (display_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create display mutex");
-        return ESP_FAIL;
-    }
-    
     // Test output
     u8g2_ClearBuffer(&u8g2);
     u8g2_SetFont(&u8g2, u8g2_font_6x10_tr);
@@ -654,6 +665,21 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
     gpio_config(&led_conf);
     gpio_set_level(LED_PIN, 0);  // LED OFF
 
+        
+    // Create mutex for thread-safe display access
+    display_mutex = xSemaphoreCreateMutex();
+    if (display_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create display mutex");
+        return ESP_FAIL;
+    }
+
+    // Create mutex for thread-safe sx1262 access
+    lora_mutex = xSemaphoreCreateMutex();
+    if (lora_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create LoRa mutex");
+        return ESP_FAIL;
+    }
+
     // Initialize menu
     init_menu();
     
@@ -661,7 +687,7 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
     if (init_display(display) != ESP_OK) {
         return ESP_FAIL;
     }
-    
+
     // Initialize SX1262
     ESP_LOGI(TAG, "Initializing SX1262...");
     if (sx1262_init() != ESP_OK) {
