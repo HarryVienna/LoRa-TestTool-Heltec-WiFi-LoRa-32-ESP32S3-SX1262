@@ -131,26 +131,19 @@ The project requires:
 
 The tool creates 3 tasks:
 
-1. **Button Task** (Priority 1)
-   - Monitors GPIO 0
-   - Debouncing, double-click detection
-   - Stack: 2 KB
+1. **Display Update Task** (Priority 6)
+   - Updates display when needed
+   - Stack: 3 KB
 
 2. **LoRa Send Task** (Priority 5)
    - Transmits packets in send mode
    - Interval: 2 seconds
    - Stack: 4 KB
 
-3. **LoRa Receive Task** (Priority 5)
+3. **LoRa Receive Task** (Priority 6)
    - Receives packets in receive mode
    - Non-blocking with 100ms timeout
    - Stack: 4 KB
-
-### Latency
-
-- Display update: ~50ms
-- Parameter change: ~100ms (including LoRa reconfiguration)
-- Button response: 10-420ms (depending on double-click detection)
 
 ## Customization
 
