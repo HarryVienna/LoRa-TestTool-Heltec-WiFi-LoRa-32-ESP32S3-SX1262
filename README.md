@@ -10,19 +10,19 @@
 
 ## Features
 
-✅ **Interactive menu** on 128x64 OLED display  
-✅ **Intuitive navigation** with short-click and long-press  
-✅ **Live configuration** of all LoRa parameters without restart  
-✅ **Send mode** with packet counter and transmit indicator  
-✅ **Receive mode** with RSSI display and packet statistics  
-✅ **Real-time updates** when changing parameters  
+**Interactive menu** on 128x64 OLED display  
+**Intuitive navigation** with short-click and long-press  
+**Live configuration** of all LoRa parameters without restart  
+**Send mode** with packet counter and transmit indicator  
+**Receive mode** with RSSI display and packet statistics  
+**Real-time updates** when changing parameters  
 
 ## Hardware
 
-- **Board**: Heltec WiFi LoRa 32 V3.x or V4
-- **Display**: 128x64 OLED (SSD1306)
-- **LoRa**: SX1262 Transceiver
-- **Button**: GPIO 0 (Boot button)
+**Board**: Heltec WiFi LoRa 32 V3.x or V4
+**Display**: 128x64 OLED (SSD1306)
+**LoRa**: SX1262 Transceiver
+**Button**: GPIO 0 (Boot button)
 
 ⚠️ **Important:** Always connect antenna!
 
