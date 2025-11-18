@@ -1,6 +1,6 @@
 /**
  * @file lora_testtool.c
- * @brief LoRa Test Tool with interactive menu for Heltec WiFi LoRa 32 V3.2
+ * @brief LoRa Test Tool with interactive menu for Heltec WiFi LoRa 32 V3.x & V4
  * 
  * Navigation:
  * Left Side (Menu):
@@ -326,9 +326,9 @@ static void lora_receive_task(void* parameter) {
     
     while (true) {
         if (menu.mode == MODE_RECEIVE) {
-            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
 
-                esp_err_t err = sx1262_receive(packet, &len, 100);
+                esp_err_t err = sx1262_receive(packet, &len, 1000);
             
                 if (err == ESP_OK && len > 0) {
                     menu.packets_received++;
@@ -355,14 +355,17 @@ static void lora_receive_task(void* parameter) {
                     ESP_LOGI(TAG, "Data: %s", packet);
 
                     // Turn off LED after 100ms
-                    vTaskDelay(pdMS_TO_TICKS(100));
+                    vTaskDelay(pdMS_TO_TICKS(10));
                     gpio_set_level(LED_PIN, 0);
                 }  
                 xSemaphoreGive(lora_mutex);
+
+                vTaskDelay(pdMS_TO_TICKS(10)); 
             }
         }
-
-        vTaskDelay(pdMS_TO_TICKS(10));
+        else {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }        
     }
 }
 

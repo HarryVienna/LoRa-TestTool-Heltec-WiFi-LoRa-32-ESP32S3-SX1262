@@ -16,7 +16,7 @@
 
 static const char* TAG = "MAIN";
 
-// Display Pins for Heltec WiFi LoRa 32 V3.2
+// Display Pins for Heltec WiFi LoRa 32 V3.x & V4
 #define PIN_SDA      17
 #define PIN_SCL      18
 #define PIN_RST      21
@@ -86,9 +86,9 @@ static esp_err_t init_display(void) {
  * @brief Main function
  */
 void app_main(void) {
-     ESP_LOGI(TAG, "=================================");
-     ESP_LOGI(TAG, "   LoRa TestTool for Heltec V3.2");
-     ESP_LOGI(TAG, "=================================");
+     ESP_LOGI(TAG, "=====================================================");
+     ESP_LOGI(TAG, "   LoRa TestTool for Heltec WiFi LoRa 32 V3.x & V4   ");
+     ESP_LOGI(TAG, "=====================================================");
 
      
      // Initialize display
