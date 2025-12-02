@@ -28,7 +28,7 @@ static const char* TAG = "LORA_TOOL";
 
 #define BUTTON_PIN          GPIO_NUM_0
 #define LED_PIN             GPIO_NUM_35
-#define SEND_INTERVAL_MS    2000
+#define SEND_INTERVAL_MS    5000
 #define PACKET_SIZE         32
 
 // ============================================================================
@@ -244,14 +244,14 @@ static void request_display_update(void) {
  */
 static void update_lora_config(void) {
     
-    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
         ESP_LOGE(TAG, "Could not take LoRa mutex for config");
         return;
     }
 
     sx1262_config_t config = {
         .modem_mode = SX1262_MODEM_LORA,
-        .frequency = 868000000,  // 868 MHz
+        .frequency = 869525000,  // 869,525 MHz == Middle of G3 band
         .tx_power = menu.tx_power,
         .bandwidth = bw_to_enum(menu.bw),
         .spreading_factor = menu.sf,
@@ -291,7 +291,7 @@ static void lora_send_task(void* parameter) {
             menu.is_sending = true;
             request_display_update();
         
-            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
 
                 esp_err_t err = sx1262_send(packet, strlen((char*)packet));
 
@@ -692,8 +692,14 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
     }
 
     // Initialize SX1262
-    ESP_LOGI(TAG, "Initializing SX1262...");
-    if (sx1262_init() != ESP_OK) {
+    ESP_LOGI(TAG, "Initializing SPI...");
+    if (sx1262_init_bus() != ESP_OK) {
+        ESP_LOGE(TAG, "SX1262 initialization failed");
+        return ESP_FAIL;
+    }
+
+        ESP_LOGI(TAG, "Initializing SX1262...");
+    if (sx1262_init_radio() != ESP_OK) {
         ESP_LOGE(TAG, "SX1262 initialization failed");
         return ESP_FAIL;
     }

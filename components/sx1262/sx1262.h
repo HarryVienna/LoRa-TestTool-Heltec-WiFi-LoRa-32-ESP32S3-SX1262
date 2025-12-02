@@ -81,6 +81,7 @@
 #define SX1262_PACKET_TYPE_LORA             0x01
 
 // Register Addresses
+#define SY1262_REG_IQ_POLARITY_SETUP        0x0736
 #define SX1262_REG_LORA_SYNC_WORD_MSB       0x0740
 #define SX1262_REG_LORA_SYNC_WORD_LSB       0x0741
 #define SX1262_REG_RANDOM_NUMBER_GEN        0x0819
@@ -90,6 +91,7 @@
 #define SX1262_REG_OCP_CONFIGURATION        0x08E7
 #define SX1262_REG_XTA_TRIM                 0x0911
 #define SX1262_REG_XTB_TRIM                 0x0912
+
 
 // Bandwidths
 typedef enum {
@@ -197,6 +199,10 @@ typedef struct {
     int16_t signal_rssi;   // Signal RSSI in dBm
 } sx1262_packet_status_t;
 
+
+// Callback function type for async receive
+typedef void (*sx1262_rx_callback_t)(uint8_t *data, uint8_t len, sx1262_packet_status_t *status);
+
 // Function declarations
 
 // ============================================================================
@@ -204,38 +210,79 @@ typedef struct {
 // ============================================================================
 
 /**
- * @brief Initialize the SX1262 LoRa transceiver driver and hardware.
+ * @brief Initialize the ESP32 SPI bus and GPIOs without resetting the radio.
  *
  * @details
- * Perform all steps required to bring the SX1262 radio into a usable state:
- * - configure and initialize required GPIOs (NSS, RESET, DIOx) and the SPI bus,
- * - perform power-on / reset sequencing,
- * - verify communication with the SX1262,
- * - perform required internal calibrations and load default radio parameters.
- *
- * This function must be called before any other sx1262_* APIs. It may block while
- * performing reset sequences and calibrations.
+ * Performs the hardware abstraction layer (HAL) initialization required for the 
+ * ESP32 to communicate with the SX1262:
+ * - configures GPIO pins (NSS, BUSY, DIO1) and the RESET pin (kept HIGH),
+ * - initializes the SPI bus driver and adds the device.
+ * * Unlike sx1262_init_radio_cold(), this function **DOES NOT** toggle the NRESET pin.
+ * It is intended to be called after waking up from ESP32 Deep Sleep to restore
+ * the SPI handle while preserving the SX1262's internal state (retention memory).
  *
  * @return
- * - ESP_OK: Initialization succeeded and the device is ready for use.
- * - ESP_ERR_INVALID_ARG: Invalid configuration or parameters detected during init.
- * - ESP_ERR_INVALID_STATE: The driver or hardware is in an unexpected state and
- *   cannot be initialized (for example, already initialized in an incompatible way).
- * - ESP_ERR_TIMEOUT: A hardware operation timed out (no response from the chip).
- * - ESP_FAIL: Generic failure (SPI/GPIO setup failed, communication error, calibration
- *   failure, etc.).
+ * - ESP_OK: SPI bus and GPIOs successfully initialized.
+ * - ESP_FAIL: SPI bus initialization failed (e.g., invalid pin map).
+ * - ESP_ERR_INVALID_STATE: Driver already initialized.
  *
  * @note
- * - Caller must ensure required system resources (SPI bus, GPIOs) are available.
- * - Behavior for repeated calls is component-defined; check corresponding deinit
- *   or reinit semantics if multiple init calls are needed.
- * - **NOT thread-safe**: This driver is NOT thread-safe. Caller must serialize all
- *   sx1262_* function calls (init, configure, send, receive) using external
- *   synchronization if concurrent access from multiple tasks is possible.
- *
- * @see sx1262_deinit(), sx1262_send(), sx1262_receive()
+ * - This function MUST be called first in `app_main`, regardless of whether a 
+ * Cold Start or Warm Start follows.
+ * - **NOT thread-safe**: Caller must ensure exclusive access.
  */
-esp_err_t sx1262_init(void);
+esp_err_t sx1262_init_bus(void);
+
+/**
+ * @brief Perform a full "Cold Start" initialization of the SX1262 radio.
+ *
+ * @details
+ * This function performs a hard reset and full re-configuration sequence. 
+ * It is intended for power-on (cold boot) or as a fallback if warm start fails.
+ * Steps performed:
+ * - Toggles NRESET pin (Hard Reset) to clear all internal radio registers,
+ * - Configures DIO3 for TCXO supply and DIO2 for RF Switch,
+ * - Performs internal RC and PLL calibration,
+ * - Sets the radio to STDBY_XOSC mode with optimal regulator settings.
+ *
+ * @pre sx1262_init_bus() must have been called successfully.
+ *
+ * @return
+ * - ESP_OK: Radio successfully reset, calibrated, and ready for configuration.
+ * - ESP_ERR_TIMEOUT: Radio did not release the BUSY line (hardware failure).
+ * - ESP_ERR_INVALID_STATE: Bus not initialized.
+ *
+ * @note
+ * - Calling this function wipes all previous radio configurations (frequency, LoRa params).
+ * - This operation takes several milliseconds (due to calibration and TCXO startup).
+ */
+esp_err_t sx1262_init_radio(void);
+
+/**
+ * @brief Wake up the SX1262 from sleep using retention memory (Warm Start).
+ *
+ * @details
+ * Attempts to wake the radio from Sleep mode without performing a reset.
+ * This function:
+ * - Toggles the NSS pin low to trigger the SX1262 wakeup sequence,
+ * - Waits for the TCXO to stabilize (BUSY low),
+ * - Verifies if the retention memory is intact by checking the Packet Type.
+ *
+ * This is significantly faster and more energy-efficient than a cold start
+ * as it skips calibration and configuration.
+ *
+ * @pre 
+ * - sx1262_init_bus() must have been called.
+ * - The radio must have been put to sleep previously using sx1262_sleep() 
+ * (which uses the retention parameter).
+ *
+ * @return
+ * - ESP_OK: Wakeup successful, configuration retained. Ready to send/receive.
+ * - ESP_FAIL: Retention check failed (e.g. power loss occurred). 
+ * The application SHOULD fall back to sx1262_init_radio_cold().
+ * - ESP_ERR_TIMEOUT: Radio did not wake up (BUSY stuck high).
+ */
+esp_err_t sx1262_wakeup(void);
 
 // ============================================================================
 // PHASE 2: LORA CONFIGURATION (callable any time)
@@ -343,6 +390,47 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len);
  *  - Maximum packet size is 255 bytes (SX1262 hardware limit).
  */
 esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms);
+
+/**
+ * @brief Start asynchronous packet reception with background task.
+ *
+ * Configures the SX1262 to receive packets in continuous mode.
+ * An internal FreeRTOS task is started which waits for the DIO1 interrupt.
+ * When a packet is received, the task reads the data via SPI and invokes 
+ * the provided callback function.
+ *
+ * @param[in] callback Function to call when a packet is received. The callback receives:
+ * - data: Pointer to received packet data (buffer is reused, copy if needed!)
+ * - len: Length of received packet in bytes
+ * - status: Pointer to struct containing RSSI (dBm) and SNR (dB)
+ * Must be non-NULL.
+ *
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if callback is NULL
+ * @return ESP_ERR_INVALID_STATE if driver not initialized or RX already running
+ * @return ESP_FAIL on hardware/configuration error
+ *
+ * @note The callback runs in a **High Priority Task context**, NOT in an ISR. 
+ * You can safely use blocking functions (like logging or other SPI calls), 
+ * but keep it efficient to not block the next packet reception.
+ * @note Call sx1262_stop_receive_async() to stop reception and kill the task.
+ * @note Only one callback can be active at a time.
+ */
+esp_err_t sx1262_start_receive_async(sx1262_rx_callback_t callback);
+
+/**
+ * @brief Stops the interrupt-driven receive mode.
+ *
+ * Disables the DIO1 interrupt, deletes the background FreeRTOS task responsible
+ * for processing incoming packets, and puts the SX1262 radio into Standby mode.
+ *
+ * @note This function is safe to call even if the interrupt mode is not currently active.
+ * @note After calling this, the radio will be in STDBY_XOSC mode. You must configure
+ * it again (e.g., call sx1262_receive or sx1262_start_receive_async) to
+ * resume reception.
+ * @note **NOT thread-safe**: Ensure exclusive access to the radio when calling this.
+ */
+void sx1262_stop_receive_async(void);
 
 // ============================================================================
 // HELPER FUNCTIONS

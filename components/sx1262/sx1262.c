@@ -11,7 +11,9 @@ static const char *TAG = "SX1262";
 // Global variables
 static spi_device_handle_t spi_handle;
 static sx1262_config_t current_config;
-static bool hw_initialized = false;
+
+static TaskHandle_t rx_task_handle = NULL;
+static sx1262_rx_callback_t rx_callback_ptr = NULL;
 
 // Helper functions (Forward Declarations)
 static void sx1262_reset(void);
@@ -26,6 +28,7 @@ static esp_err_t sx1262_read_register(uint16_t addr, uint8_t *data, uint8_t len)
 static esp_err_t sx1262_spi_write_general(uint8_t *tx_header, uint8_t tx_header_len, uint8_t *data, uint8_t data_len);
 static esp_err_t sx1262_spi_read_general(uint8_t *tx_header, uint8_t tx_header_len, uint8_t *rx_data, uint8_t rx_len);
 
+static esp_err_t sx1262_calibrate_image(uint32_t frequency);
 static esp_err_t sx1262_set_dio_irq_params(uint16_t irq_mask, uint16_t dio1_mask, uint16_t dio2_mask, uint16_t dio3_mask);
 static esp_err_t sx1262_clear_irq_status(uint16_t irq_mask);
 static uint16_t sx1262_get_irq_status(void);
@@ -34,33 +37,32 @@ static uint16_t sx1262_get_irq_status(void);
 // PHASE 1: HARDWARE INITIALIZATION
 // ============================================================================
 
-esp_err_t sx1262_init(void)
+esp_err_t sx1262_init_bus(void)
 {
     esp_err_t ret;
 
-    ESP_LOGI(TAG, "Hardware initialization...");
+    ESP_LOGI(TAG, "SPI initialization...");
 
     // GPIO Configuration
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << LORA_PIN_RST) | (1ULL << LORA_PIN_BUSY),
+        .pin_bit_mask = (1ULL << LORA_PIN_DIO1) | (1ULL << LORA_PIN_BUSY),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE
     };
     
-    // BUSY as Input
+    // BUSY & DIO1 as Input
     gpio_config(&io_conf);
 
-    // RST as Output
+
     io_conf.pin_bit_mask = (1ULL << LORA_PIN_RST);
     io_conf.mode = GPIO_MODE_OUTPUT;
+    
+    // RST as Output
     gpio_config(&io_conf);
+    gpio_set_level(LORA_PIN_RST, 1); // Configure Reset Pin as output and set to 1 (High) as a precaution
 
-    // DIO1 as Input (for Interrupt)
-    io_conf.pin_bit_mask = (1ULL << LORA_PIN_DIO1);
-    io_conf.mode = GPIO_MODE_INPUT;
-    gpio_config(&io_conf);
 
     // SPI Bus Configuration
     spi_bus_config_t buscfg = {
@@ -93,6 +95,18 @@ esp_err_t sx1262_init(void)
         ESP_LOGE(TAG, "SPI Device Add failed");
         return ret;
     }
+
+    ESP_LOGI(TAG, "SPI initialized successfully");
+    
+    return ESP_OK;
+}
+
+
+esp_err_t sx1262_init_radio(void)
+{
+    esp_err_t ret;
+
+    ESP_LOGI(TAG, "Radio initialization...");
 
     // Hardware Reset
     sx1262_reset();
@@ -151,10 +165,39 @@ esp_err_t sx1262_init(void)
         return ret;
     }
 
-    hw_initialized = true;
-    ESP_LOGI(TAG, "Hardware initialized successfully");
+    ESP_LOGI(TAG, "Radio initialized successfully");
     
     return ESP_OK;
+}
+
+esp_err_t sx1262_wakeup(void)
+{
+
+    ESP_LOGI(TAG, "Performing Warm Start (Retention Wakeup)...");
+
+    // Manual wakeup (NSS Low)
+    gpio_set_level(LORA_PIN_NSS, 0);
+
+    // Wait for BUSY Low (chip boots up, TCXO stabilizes)
+    // Your existing function is safe here since NSS is already Low
+    sx1262_wait_on_busy(); 
+
+    // NSS High (end transaction)
+    gpio_set_level(LORA_PIN_NSS, 1);
+
+    // Check if retention was successful (Optional but recommended)
+    // We read the Packet Type. If it is 0x01 (LoRa), the chip has retained its state.
+    // After a Hard Reset, it would default to FSK (or undefined/Standby).
+    uint8_t packet_type;
+    esp_err_t ret = sx1262_read_command(SX1262_CMD_GET_PACKET_TYPE, &packet_type, 1);
+    
+    if (ret == ESP_OK && packet_type == 0x01) {
+        ESP_LOGI(TAG, "Warmstart successful. Chip retained state.");
+        return ESP_OK;
+    } else {
+        ESP_LOGW(TAG, "Warmstart failed (Register lost). Fallback to Cold Start.");
+        return ESP_FAIL; // Signals the app that it must call sx1262_init_radio()
+    }
 }
 
 // ============================================================================
@@ -164,11 +207,6 @@ esp_err_t sx1262_init(void)
 esp_err_t sx1262_configure(const sx1262_config_t *config)
 {
     esp_err_t ret = ESP_OK;
-
-    if (!hw_initialized) {
-        ESP_LOGE(TAG, "Hardware not initialized! Call sx1262_hw_init() first!");
-        return ESP_ERR_INVALID_STATE;
-    }
 
     if (!config) {
         return ESP_ERR_INVALID_ARG;
@@ -186,7 +224,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 1. Set Packet Type (LoRa or FSK)
+    // Set Packet Type (LoRa or FSK)
     uint8_t packet_type = (config->modem_mode == SX1262_MODEM_LORA) ? 
                            SX1262_PACKET_TYPE_LORA : SX1262_PACKET_TYPE_GFSK;
     ret = sx1262_write_command(SX1262_CMD_SET_PACKET_TYPE, &packet_type, 1);
@@ -195,7 +233,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 2. Set RF Frequency
+    // Set RF Frequency
     uint32_t freq_reg = ((uint64_t)config->frequency << 25) / 32000000;
     uint8_t freq_params[4];
     freq_params[0] = (freq_reg >> 24) & 0xFF;
@@ -209,9 +247,14 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 3. Set PA Config
+    // Perform Image Calibration for the configured frequency band
+    ret = sx1262_calibrate_image(config->frequency);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Image Calibration failed");
+        return ret;
+    }
 
-    // Semtech_SX1261_2 V2-2.pdf Chapter 15.2 TxClampConfig fix
+    // Set PA Config (Datasheet 15.2 TxClampConfig fix)
     uint8_t tx_clamp_cfg;
     ret = sx1262_read_register(SX1262_REG_TX_CLAMP_CFG, &tx_clamp_cfg, 1);
     if (ret != ESP_OK) {
@@ -275,7 +318,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 4. Set TX Params
+    // Set TX Params
     uint8_t tx_params[2];
     tx_params[0] = power;
     tx_params[1] = 0x04; // 200us ramp
@@ -286,7 +329,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 5. Set Modulation Params
+    // Set Modulation Params
     if (config->modem_mode == SX1262_MODEM_LORA) {
         // LoRa Modulation
         uint8_t mod_params[4];
@@ -319,12 +362,12 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 6. Set Packet Params
+    // Set Packet Params
     if (config->modem_mode == SX1262_MODEM_LORA) {
         // LoRa Packet Parameters
         uint8_t packet_params[6];
 
-        // Semtech_SX1261_2 V2-2.pdf Chapter 6.1.1.1 Preamble length for SF5 and SF6
+        // Datasheet 6.1.1.1 Preamble length for SF5 and SF6
         uint16_t preamble_length = (config->spreading_factor <= 6) ? 12 : config->preamble_length;
 
         packet_params[0] = (preamble_length >> 8) & 0xFF;
@@ -356,7 +399,34 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 7. Set Sync Word (LoRa only, optional)
+    // Datasheet 15.4 Workaround: Optimizing Inverted IQ Operation
+    if (config->modem_mode == SX1262_MODEM_LORA) {
+        uint8_t iq_reg;
+        sx1262_read_register(SY1262_REG_IQ_POLARITY_SETUP, &iq_reg, 1); // Register IQ Polarity Setup
+        
+        if (config->iq_inverted) {
+            iq_reg &= ~(1 << 2); // Bit 2 auf 0 setzen
+        } else {
+            iq_reg |= (1 << 2);  // Bit 2 auf 1 setzen (Standard)
+        }
+        sx1262_write_register(SY1262_REG_IQ_POLARITY_SETUP, &iq_reg, 1);
+    }
+
+    if (config->modem_mode == SX1262_MODEM_LORA) {
+
+        // Datasheet 15.1.2 Workaround: Quality with 500kHz LoRa BW 
+        uint8_t tx_mod_reg;
+        sx1262_read_register(SX1262_REG_TX_MODULATION, &tx_mod_reg, 1);
+        
+        if (config->bandwidth == LORA_BW_500) {
+            tx_mod_reg &= ~(1 << 2); // Delete Bit 2 
+        } else {
+            tx_mod_reg |= (1 << 2);  // Set Bit 2 
+        }
+        sx1262_write_register(SX1262_REG_TX_MODULATION, &tx_mod_reg, 1);
+    }
+
+    // Set Sync Word (LoRa only, optional)
     if (config->modem_mode == SX1262_MODEM_LORA && config->sync_word != 0) {
         uint8_t sync_word_msb = (config->sync_word >> 8) & 0xFF;
         uint8_t sync_word_lsb = config->sync_word & 0xFF;
@@ -376,7 +446,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         ESP_LOGI(TAG, "Sync Word set: 0x%04X", config->sync_word);
     }
 
-    // 8. Set Buffer Base Address
+    // Set Buffer Base Address
     uint8_t buffer_params[2] = {0x00, 0x00}; // TX=0, RX=0
     ret = sx1262_write_command(SX1262_CMD_SET_BUFFER_BASE_ADDRESS, buffer_params, 2);
     if (ret != ESP_OK) {
@@ -384,7 +454,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 9. Configure IRQ
+    // Configure IRQ
     ret = sx1262_set_dio_irq_params(SX1262_IRQ_TX_DONE | SX1262_IRQ_RX_DONE | SX1262_IRQ_TIMEOUT,
                                    SX1262_IRQ_TX_DONE | SX1262_IRQ_RX_DONE | SX1262_IRQ_TIMEOUT,
                                    0x0000, 0x0000);
@@ -393,7 +463,7 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
         return ret;
     }
 
-    // 10. Set RX Gain
+    // Set RX Gain
     if (config->rx_gain_boosted) {
         uint8_t rx_gain_boosted = 0x96;
         ret = sx1262_write_register(SX1262_REG_RX_GAIN, &rx_gain_boosted, 1);
@@ -432,11 +502,6 @@ esp_err_t sx1262_configure(const sx1262_config_t *config)
 esp_err_t sx1262_send(uint8_t *data, uint8_t len)
 {
     esp_err_t ret = ESP_OK;
-
-    if (!hw_initialized) {
-        ESP_LOGE(TAG, "Hardware not initialized!");
-        return ESP_ERR_INVALID_STATE;
-    }
 
     if (data == NULL || len == 0 || len > 255) {
         return ESP_ERR_INVALID_ARG;
@@ -519,11 +584,6 @@ esp_err_t sx1262_send(uint8_t *data, uint8_t len)
 esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
 {
     esp_err_t ret = ESP_OK;
-
-    if (!hw_initialized) {
-        ESP_LOGE(TAG, "Hardware not initialized!");
-        return ESP_ERR_INVALID_STATE;
-    }
 
     if (data == NULL || len == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -635,6 +695,164 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
     return ret;
 }
 
+// The actual interrupt handler (runs in ISR context -> NO SPI here!)
+static void IRAM_ATTR sx1262_dio1_isr_handler(void *arg)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    
+    // Notify the RX task that DIO1 has fired
+    if (rx_task_handle != NULL) {
+        vTaskNotifyGiveFromISR(rx_task_handle, &xHigherPriorityTaskWoken);
+    }
+    
+    // Force a context switch if the task has a higher priority than the current one
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+// The background task that does the work (runs in task context -> SPI allowed)
+static void sx1262_rx_task(void *arg)
+{
+    uint8_t rx_buffer[255];
+    uint8_t rx_len = 0;
+    sx1262_packet_status_t pkt_status;
+    
+    ESP_LOGI(TAG, "RX Interrupt Task started");
+
+    while (1) {
+        // Wait for signal from ISR (blocking, consumes no CPU)
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        // Check what happened (read IRQ status)
+        uint16_t irq_status = sx1262_get_irq_status();
+
+        // If RX Done
+        if (irq_status & SX1262_IRQ_RX_DONE) {
+            
+            // Clear IRQ
+            sx1262_clear_irq_status(SX1262_IRQ_RX_DONE);
+
+            // Get buffer status
+            uint8_t buffer_status[2];
+            if (sx1262_read_command(SX1262_CMD_GET_RX_BUFFER_STATUS, buffer_status, 2) == ESP_OK) {
+                uint8_t payload_len = buffer_status[0];
+                uint8_t rx_start_ptr = buffer_status[1];
+
+                // Read data
+                uint8_t tx_header[3] = {SX1262_CMD_READ_BUFFER, rx_start_ptr, 0x00};
+                if (sx1262_spi_read_general(tx_header, 3, rx_buffer, payload_len) == ESP_OK) {
+                    
+                    // Get packet info (RSSI/SNR)
+                    sx1262_get_packet_status(&pkt_status);
+
+                    // CALL CALLBACK
+                    if (rx_callback_ptr != NULL) {
+                        rx_callback_ptr(rx_buffer, payload_len, &pkt_status);
+                    }
+                }
+            }
+        }
+
+        // Error handling (CRC, Timeout)
+        if (irq_status & (SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR)) {
+            ESP_LOGW(TAG, "RX Error (CRC/Header)");
+            sx1262_clear_irq_status(SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR);
+        }
+
+        // Important: REACTIVATE reception mode (Continuous Mode)
+        // Since we often fall back to Standby in Fallback Mode, we reset RX here.
+        // 0xFFFFFF = Continuous RX
+        uint8_t rx_params[3] = {0xFF, 0xFF, 0xFF};
+        sx1262_write_command(SX1262_CMD_SET_RX, rx_params, 3);
+    }
+}
+
+esp_err_t sx1262_start_receive_async(sx1262_rx_callback_t callback)
+{
+    esp_err_t ret;
+
+    if (callback == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (rx_task_handle != NULL) {
+        ESP_LOGW(TAG, "RX Interrupt mode already running");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Save callback
+    rx_callback_ptr = callback;
+
+    // Set radio to standby to change config
+    sx1262_standby();
+
+    // Configure DIO1 pin for interrupt
+    // We need to update the GPIO config to allow interrupts
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << LORA_PIN_DIO1),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_POSEDGE // Interrupt bei steigender Flanke (High = Done)
+    };
+    gpio_config(&io_conf);
+
+    // Create FreeRTOS task
+    // Stack size 4096 is safe for SPI and logs, high priority (e.g. 10) so packet is processed quickly
+    BaseType_t task_ret = xTaskCreate(sx1262_rx_task, "sx1262_rx_task", 4096, NULL, 10, &rx_task_handle);
+    if (task_ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create RX task");
+        return ESP_FAIL;
+    }
+
+    // Install ISR service (if not already done) and add handler
+    // Ignore error if service is already running (ESP_ERR_INVALID_STATE)
+    gpio_install_isr_service(0); 
+    
+    ret = gpio_isr_handler_add(LORA_PIN_DIO1, sx1262_dio1_isr_handler, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add ISR handler");
+        vTaskDelete(rx_task_handle);
+        rx_task_handle = NULL;
+        return ret;
+    }
+
+    // Set IRQ mask on chip (RX Done, CRC Error)
+    sx1262_set_dio_irq_params(SX1262_IRQ_RX_DONE | SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR,
+                              SX1262_IRQ_RX_DONE | SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR,
+                              0x0000, 0x0000);
+
+    // Put radio in Continuous RX mode
+    uint8_t rx_params[3] = {0xFF, 0xFF, 0xFF}; // Continuous
+    ret = sx1262_write_command(SX1262_CMD_SET_RX, rx_params, 3);
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "RX Interrupt Mode started");
+    }
+
+    return ret;
+}
+
+void sx1262_stop_receive_async(void)
+{
+    if (rx_task_handle == NULL) return;
+
+    // Deactivate interrupt
+    gpio_isr_handler_remove(LORA_PIN_DIO1);
+    
+    // Set GPIO back to interrupt-less
+    gpio_set_intr_type(LORA_PIN_DIO1, GPIO_INTR_DISABLE);
+
+    // Delete task
+    vTaskDelete(rx_task_handle);
+    rx_task_handle = NULL;
+    rx_callback_ptr = NULL;
+
+    // Radio in standby
+    sx1262_standby();
+
+    ESP_LOGI(TAG, "RX Interrupt Mode stopped");
+}
+
 // ============================================================================
 // HELPER FUNCTIONS 
 // ============================================================================
@@ -707,7 +925,7 @@ esp_err_t sx1262_get_chip_info(void)
 
     ESP_LOGI(TAG, "=== SX1262 Chip Information ===");
     
-    // 1. Get Status
+    // Get Status
     uint8_t status[1];
     ret = sx1262_read_command(SX1262_CMD_GET_STATUS, status, 1);
     if (ret == ESP_OK) {
@@ -727,7 +945,7 @@ esp_err_t sx1262_get_chip_info(void)
         return ret;
     }
     
-    // 2. Read Packet Type
+    // Read Packet Type
     uint8_t packet_type[1];
     ret = sx1262_read_command(SX1262_CMD_GET_PACKET_TYPE, packet_type, 1);
     if (ret == ESP_OK) {
@@ -736,7 +954,7 @@ esp_err_t sx1262_get_chip_info(void)
                  packet_type[0] == 0x01 ? "LoRa" : "Unknown");
     }
     
-    // 3. Random Number Generator Test (checks if chip is working)
+    // Random Number Generator Test (checks if chip is working)
     uint8_t random[4];
     ret = sx1262_read_register(SX1262_REG_RANDOM_NUMBER_GEN, random, 4);
     if (ret == ESP_OK) {
@@ -752,7 +970,7 @@ esp_err_t sx1262_get_chip_info(void)
         }
     }
     
-    // 4. Read Sync Word (LoRa only)
+    // Read Sync Word (LoRa only)
     if (current_config.modem_mode == SX1262_MODEM_LORA) {
         uint8_t sync_msb, sync_lsb;
         ret = sx1262_read_register(SX1262_REG_LORA_SYNC_WORD_MSB, &sync_msb, 1);
@@ -771,7 +989,7 @@ esp_err_t sx1262_get_chip_info(void)
         }
     }
     
-    // 5. Over Current Protection
+    // Over Current Protection
     uint8_t ocp[1];
     ret = sx1262_read_register(SX1262_REG_OCP_CONFIGURATION, ocp, 1);
     if (ret == ESP_OK) {
@@ -780,7 +998,7 @@ esp_err_t sx1262_get_chip_info(void)
         ESP_LOGI(TAG, "OCP Limit: %.1f mA", ocp_ma);
     }
     
-    // 6. RX Gain
+    // RX Gain
     uint8_t rx_gain[1];
     ret = sx1262_read_register(SX1262_REG_RX_GAIN, rx_gain, 1);
     if (ret == ESP_OK) {
@@ -818,6 +1036,73 @@ static void sx1262_wait_on_busy(void)
         }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+}
+
+/**
+ * @brief Perform Image Calibration for a specific frequency band
+ * 
+ * The SX1262 requires image calibration to optimize RX performance for
+ * specific frequency bands. This function automatically selects the 
+ * correct calibration frequencies based on the configured RF frequency.
+ * 
+ * @param frequency RF frequency in Hz
+ * @return esp_err_t ESP_OK on success, error code otherwise
+ */
+static esp_err_t sx1262_calibrate_image(uint32_t frequency)
+{
+    uint8_t cal_freq[2];
+    
+    // Determine calibration frequencies based on operating frequency
+    // Values from Datasheet Table 9-2: Image Calibration Over the ISM Bands
+    
+    if (frequency >= 430000000 && frequency <= 440000000) {
+        // 430-440 MHz band
+        cal_freq[0] = 0x6B;  // freq1
+        cal_freq[1] = 0x6F;  // freq2
+        ESP_LOGI(TAG, "Image Calibration for 430-440 MHz");
+        
+    } else if (frequency >= 470000000 && frequency <= 510000000) {
+        // 470-510 MHz band
+        cal_freq[0] = 0x75;  // freq1
+        cal_freq[1] = 0x81;  // freq2
+        ESP_LOGI(TAG, "Image Calibration for 470-510 MHz");
+        
+    } else if (frequency >= 779000000 && frequency <= 787000000) {
+        // 779-787 MHz band
+        cal_freq[0] = 0xC1;  // freq1
+        cal_freq[1] = 0xC5;  // freq2
+        ESP_LOGI(TAG, "Image Calibration for 779-787 MHz");
+        
+    } else if (frequency >= 863000000 && frequency <= 870000000) {
+        // 863-870 MHz band (Europa ISM)
+        cal_freq[0] = 0xD7;  // freq1
+        cal_freq[1] = 0xDB;  // freq2
+        ESP_LOGI(TAG, "Image Calibration for 863-870 MHz (EU868)");
+        
+    } else if (frequency >= 902000000 && frequency <= 928000000) {
+        // 902-928 MHz band (US ISM)
+        cal_freq[0] = 0xE1;  // freq1
+        cal_freq[1] = 0xE9;  // freq2
+        ESP_LOGI(TAG, "Image Calibration for 902-928 MHz (US915)");
+        
+    } else {
+        // Frequency outside standard ISM bands
+        ESP_LOGW(TAG, "Frequency %lu Hz outside standard ISM bands - skipping image calibration", frequency);
+        return ESP_OK;  // Not an error, just not applicable
+    }
+
+    // Execute calibration command
+    esp_err_t ret = sx1262_write_command(SX1262_CMD_CALIBRATE_IMAGE, cal_freq, 2);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Image Calibration failed");
+        return ret;
+    }
+    
+    // Wait for calibration to complete (typical: 2ms, worst case: 10ms)
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    ESP_LOGI(TAG, "Image Calibration completed");
+    return ESP_OK;
 }
 
 static esp_err_t sx1262_write_command(uint8_t cmd, uint8_t *data, uint8_t len)
