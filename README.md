@@ -2,6 +2,14 @@
 
 **Interactive LoRa test tool with OLED display and real-time parameter configuration**
 
+
+
+You can find a detailed introduction to LoRa [on my website](https://www.haraldkreuzer.net/en/news/lora-radio-technology-internet-things) 
+
+Infos about the SX1262, the ESP32 driver and this tool you can find [here](https://www.haraldkreuzer.net/en/news/LoRa-with-the-ESP32-and-Semtech-SX1262) 
+
+
+
 ![PXL_20251110_092105251_github](https://github.com/user-attachments/assets/1a1c75ff-7fc7-40b1-8ddd-05989fd5cc19)
 
 ![ESP32](https://img.shields.io/badge/ESP32-S3-blue) ![LoRa](https://img.shields.io/badge/LoRa-SX1262-green) 
@@ -16,6 +24,7 @@
 **Send mode** with packet counter and transmit indicator  
 **Receive mode** with RSSI display and packet statistics  
 **Real-time updates** when changing parameters  
+
 
 ## Hardware
 
