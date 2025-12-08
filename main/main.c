@@ -23,7 +23,28 @@ static const char* TAG = "MAIN";
 #define PIN_SCL      GPIO_NUM_18
 #define PIN_RST      GPIO_NUM_21
 #define PIN_VEXT     GPIO_NUM_36
-#define PIN_VFEM     GPIO_NUM_7
+
+// -------------------------------------------------------------------------
+// PIN DEFINITIONS FOR RF FRONT-END MODULE (FEM)
+// -------------------------------------------------------------------------
+// These pins are critical for the Heltec WiFi LoRa 32 V4 (V4.2). 
+// The V4 uses an external amplifier (GC1109) which must be explicitly enabled.
+//
+// V4 Functionality:
+// - GPIO 7 (VFEM):   Power supply for the amplifier circuit.
+// - GPIO 2 (CSD):    Chip Shut Down. Must be HIGH to enable the GC1109.
+// - GPIO 46 (CPS):   Control Path Select. Must be HIGH for High-Power TX (+28dBm).
+//                    If LOW, the board runs in low-power "bypass mode".
+//
+// V3 Compatibility:
+// - On V3 boards, these pins (7, 2, 46) are not used internally. 
+// - They are exposed on the pin headers. 
+// - Setting them to HIGH is safe for V3, provided no external hardware 
+//   that conflicts with a HIGH signal is connected to these headers.
+// -------------------------------------------------------------------------
+#define PIN_VFEM     GPIO_NUM_7   // Amplifier power
+#define PIN_PA_CSD   GPIO_NUM_2   // Chip Shut Down / Enable
+#define PIN_PA_CPS   GPIO_NUM_46  // RX/TX Path Control
 
 
 // U8g2 Display Handle
@@ -35,7 +56,7 @@ static u8g2_t u8g2;
 static esp_err_t init_board(void) {
     // Configure and enable VExt & VFem Pin
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PIN_VEXT | 1ULL << PIN_VFEM),
+        .pin_bit_mask = (1ULL << PIN_VEXT | 1ULL << PIN_VFEM | 1ULL << PIN_PA_CSD | 1ULL << PIN_PA_CPS),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -43,10 +64,16 @@ static esp_err_t init_board(void) {
     };
     gpio_config(&io_conf);
 
+    // 1. Display on
     gpio_set_level(PIN_VEXT, 0);   // LOW = Turn on display
     ESP_LOGI(TAG, "VExt activated (Display power supply)");
 
-    gpio_set_level(PIN_VFEM, 1);   // 
+    // 2. Activate amplifier logic (IMPORTANT!)
+    gpio_set_level(PIN_PA_CSD, 1); 
+    gpio_set_level(PIN_PA_CPS, 1); 
+
+    // 3. Amplifier power on
+    gpio_set_level(PIN_VFEM, 1); 
     ESP_LOGI(TAG, "VFem activated");
 
     // Longer delay for stabilization after VExt activation
