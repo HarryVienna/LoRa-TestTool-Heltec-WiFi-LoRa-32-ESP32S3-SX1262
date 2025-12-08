@@ -9,6 +9,11 @@
  * Right Side (Edit):
  * - Short Click: Next value
  * - Long Press: Back to left side (Menu)
+ * 
+ * Architecture:
+ * - Uses async receive mode with callback instead of blocking receive
+ * - No separate receive task needed - packets are handled in rx_callback()
+ * - Async RX is started/stopped directly when switching modes
  */
 
 #include <stdio.h>
@@ -28,7 +33,7 @@ static const char* TAG = "LORA_TOOL";
 
 #define BUTTON_PIN          GPIO_NUM_0
 #define LED_PIN             GPIO_NUM_35
-#define SEND_INTERVAL_MS    5000
+#define SEND_INTERVAL_MS    2000
 #define PACKET_SIZE         32
 
 // ============================================================================
@@ -76,6 +81,7 @@ static TaskHandle_t lora_task_handle = NULL;
 static SemaphoreHandle_t display_mutex = NULL;
 static SemaphoreHandle_t lora_mutex = NULL;
 static volatile bool display_needs_update = false;
+static volatile bool rx_mode_active = false;  // Tracks if async RX is active
 
 // ============================================================================
 // DISPLAY FUNCTIONS
@@ -240,6 +246,43 @@ static void request_display_update(void) {
 // ============================================================================
 
 /**
+ * @brief Callback function for asynchronous packet reception
+ * 
+ * This is called from the SX1262 driver's receive task when a packet arrives.
+ * The callback runs in a HIGH PRIORITY task context (not ISR), so we can 
+ * safely use logging and GPIO operations.
+ */
+static void rx_callback(uint8_t *data, uint8_t len, sx1262_packet_status_t *status) {
+    // Increment receive counter
+    menu.packets_received++;
+    
+    // Turn on LED
+    gpio_set_level(LED_PIN, 1);
+    
+    // Store RSSI and timestamp
+    menu.last_rssi = status->rssi_pkt;
+    menu.last_packet_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    
+    // Log packet reception
+    ESP_LOGI(TAG, "RX #%lu: %d bytes, RSSI:%d, SNR:%.1f", 
+             menu.packets_received, len, 
+             status->rssi_pkt, status->snr_pkt);
+    
+    // Print packet data (null-terminate safely)
+    if (len < 255) {
+        data[len] = '\0';
+        ESP_LOGI(TAG, "Data: %s", data);
+    }
+    
+    // Request display update
+    request_display_update();
+    
+    // Turn off LED after short delay
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(LED_PIN, 0);
+}
+
+/**
  * @brief Updates the LoRa configuration based on menu settings (thread-safe)
  */
 static void update_lora_config(void) {
@@ -318,54 +361,47 @@ static void lora_send_task(void* parameter) {
 }
 
 /**
- * @brief LoRa Receive Task
+ * @brief Start asynchronous receive mode
  */
-static void lora_receive_task(void* parameter) {
-    uint8_t packet[256];
-    uint8_t len;
+static void start_async_rx(void) {
+    if (rx_mode_active) {
+        return;  // Already active
+    }
     
-    while (true) {
-        if (menu.mode == MODE_RECEIVE) {
-            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-
-                esp_err_t err = sx1262_receive(packet, &len, 1000);
-            
-                if (err == ESP_OK && len > 0) {
-                    menu.packets_received++;
-
-                    // Turn on LED
-                    gpio_set_level(LED_PIN, 1);  // ON
-
-                    menu.last_packet_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
-                    
-                    // Read RSSI
-                    sx1262_packet_status_t status;
-                    if (sx1262_get_packet_status(&status) == ESP_OK) {
-                        menu.last_rssi = status.rssi_pkt;
-                        ESP_LOGI(TAG, "RX #%lu: %d bytes, RSSI:%d, SNR:%.1f", 
-                                menu.packets_received, len, 
-                                status.rssi_pkt, status.snr_pkt);
-                    }
-                    
-                    // Update display
-                    request_display_update();
-                    
-                    // Print packet
-                    packet[len] = '\0';
-                    ESP_LOGI(TAG, "Data: %s", packet);
-
-                    // Turn off LED after 100ms
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                    gpio_set_level(LED_PIN, 0);
-                }  
-                xSemaphoreGive(lora_mutex);
-
-                vTaskDelay(pdMS_TO_TICKS(10)); 
-            }
+    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+        ESP_LOGI(TAG, "Starting async receive mode...");
+        esp_err_t err = sx1262_start_receive_async(rx_callback);
+        
+        if (err == ESP_OK) {
+            rx_mode_active = true;
+            ESP_LOGI(TAG, "Async RX mode started successfully");
+        } else {
+            ESP_LOGE(TAG, "Failed to start async RX: %s", esp_err_to_name(err));
         }
-        else {
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }        
+        
+        xSemaphoreGive(lora_mutex);
+    } else {
+        ESP_LOGW(TAG, "Could not take LoRa mutex for starting RX");
+    }
+}
+
+/**
+ * @brief Stop asynchronous receive mode
+ */
+static void stop_async_rx(void) {
+    if (!rx_mode_active) {
+        return;  // Already stopped
+    }
+    
+    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+        ESP_LOGI(TAG, "Stopping async receive mode...");
+        sx1262_stop_receive_async();
+        rx_mode_active = false;
+        ESP_LOGI(TAG, "Async RX mode stopped");
+        
+        xSemaphoreGive(lora_mutex);
+    } else {
+        ESP_LOGW(TAG, "Could not take LoRa mutex for stopping RX");
     }
 }
 
@@ -410,7 +446,19 @@ static void menu_next_value(void) {
     
     switch(menu.current_item) {
         case MENU_MODE:
+            // Stop async RX if currently in receive mode
+            if (menu.mode == MODE_RECEIVE) {
+                stop_async_rx();
+            }
+            
+            // Switch mode
             menu.mode = (menu.mode == MODE_SEND) ? MODE_RECEIVE : MODE_SEND;
+            
+            // Start async RX if switching to receive mode
+            if (menu.mode == MODE_RECEIVE) {
+                start_async_rx();
+            }
+            
             // Reset counters on mode change
             menu.packets_sent = 0;
             menu.packets_received = 0;
@@ -534,7 +582,7 @@ static void init_menu(void) {
     
     menu.current_item = MENU_MODE;
     menu.editing = false;
-    menu.mode = MODE_SEND;
+    menu.mode = MODE_RECEIVE;
     menu.sf = 5;
     menu.bw = 125;
     menu.cr = LORA_CR_4_5;
@@ -627,21 +675,6 @@ static esp_err_t start_lora_tasks(void) {
         return ESP_FAIL;
     }
     
-    // Receive Task
-    ret = xTaskCreate(
-        lora_receive_task,
-        "lora_recv",
-        4096,
-        NULL,
-        5,
-        NULL
-    );
-    
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create receive task");
-        return ESP_FAIL;
-    }
-    
     ESP_LOGI(TAG, "LoRa tasks started");
     return ESP_OK;
 }
@@ -668,7 +701,6 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
     gpio_config(&led_conf);
     gpio_set_level(LED_PIN, 0);  // LED OFF
 
-        
     // Create mutex for thread-safe display access
     display_mutex = xSemaphoreCreateMutex();
     if (display_mutex == NULL) {
@@ -707,6 +739,11 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
     // Initial LoRa configuration
     update_lora_config();
     
+    // Start async RX if initial mode is RECEIVE
+    if (menu.mode == MODE_RECEIVE) {
+        start_async_rx();
+    }
+    
     // Initialize button
     if (init_button() != ESP_OK) {
         return ESP_FAIL;
@@ -737,6 +774,9 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
  * @brief Frees resources
  */
 void lora_testtool_deinit(void) {
+    // Stop async RX if active
+    stop_async_rx();
+    
     if (button) {
         button_delete(button);
     }

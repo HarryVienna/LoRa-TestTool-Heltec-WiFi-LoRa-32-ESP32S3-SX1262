@@ -19,36 +19,49 @@
 static const char* TAG = "MAIN";
 
 // Display Pins for Heltec WiFi LoRa 32 V3.x & V4
-#define PIN_SDA      17
-#define PIN_SCL      18
-#define PIN_RST      21
-#define PIN_VEXT     36
+#define PIN_SDA      GPIO_NUM_17
+#define PIN_SCL      GPIO_NUM_18
+#define PIN_RST      GPIO_NUM_21
+#define PIN_VEXT     GPIO_NUM_36
+#define PIN_VFEM     GPIO_NUM_7
 
 
 // U8g2 Display Handle
 static u8g2_t u8g2;
 
 /**
- * @brief Initializes the OLED Display
+ * @brief COnfigure VExt and VFem
+ */
+static esp_err_t init_board(void) {
+    // Configure and enable VExt & VFem Pin
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << PIN_VEXT | 1ULL << PIN_VFEM),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf);
+
+    gpio_set_level(PIN_VEXT, 0);   // LOW = Turn on display
+    ESP_LOGI(TAG, "VExt activated (Display power supply)");
+
+    gpio_set_level(PIN_VFEM, 1);   // 
+    ESP_LOGI(TAG, "VFem activated");
+
+    // Longer delay for stabilization after VExt activation
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    ESP_LOGI(TAG, "Board initialized");
+    return ESP_OK;
+
+}
+
+/**
+ * @brief Initializes GC1109 & OLED Display 
  */
 static esp_err_t init_display(void) {
-     // Configure and enable VExt Pin
-     // LOW = Display/LoRa power supply ON
-     gpio_config_t io_conf = {
-         .pin_bit_mask = (1ULL << PIN_VEXT),
-         .mode = GPIO_MODE_OUTPUT,
-         .pull_up_en = GPIO_PULLUP_DISABLE,
-         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-         .intr_type = GPIO_INTR_DISABLE
-     };
-     gpio_config(&io_conf);
-     gpio_set_level(PIN_VEXT, 0);   // LOW = Turn on display
-     
-     ESP_LOGI(TAG, "VExt activated (Display power supply)");
-     
-     // Longer delay for stabilization after VExt activation
-     vTaskDelay(pdMS_TO_TICKS(200));
-     
+
      // Configure U8g2 ESP32 HAL
      ESP_LOGI(TAG, "Configuring U8g2 HAL...");
      u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
@@ -92,7 +105,12 @@ void app_main(void) {
      ESP_LOGI(TAG, "   LoRa TestTool for Heltec WiFi LoRa 32 V3.x & V4   ");
      ESP_LOGI(TAG, "=====================================================");
 
-     
+     // Initialize Board
+     if (init_board() != ESP_OK) {
+         ESP_LOGE(TAG, "Board initialization failed!");
+         return;
+     }
+
      // Initialize display
      if (init_display() != ESP_OK) {
          ESP_LOGE(TAG, "Display initialization failed!");
