@@ -10,10 +10,17 @@
  * - Short Click: Next value
  * - Long Press: Back to left side (Menu)
  * 
+ * Operation:
+ * - Program starts in Edit mode with all operations stopped
+ * - In Edit mode (right side): All operations stopped, parameters can be changed
+ * - On exit from Edit mode: Configuration applied and operations start
+ * - In Menu mode (left side): Radio operates based on selected mode
+ * - On enter to Edit mode: All operations stop immediately
+ * 
  * Architecture:
  * - Uses async receive mode with callback instead of blocking receive
  * - No separate receive task needed - packets are handled in rx_callback()
- * - Async RX is started/stopped directly when switching modes
+ * - Send task is suspended when not needed (Edit mode or RECEIVE mode)
  */
 
 #include <stdio.h>
@@ -77,11 +84,11 @@ typedef struct {
 static menu_state_t menu;
 static u8g2_t u8g2;
 static button_handle_t* button;
-static TaskHandle_t lora_task_handle = NULL;
+static TaskHandle_t send_task_handle = NULL;
 static SemaphoreHandle_t display_mutex = NULL;
-static SemaphoreHandle_t lora_mutex = NULL;
 static volatile bool display_needs_update = false;
 static volatile bool rx_mode_active = false;  // Tracks if async RX is active
+static volatile bool tx_mode_active = false;  // Tracks if sending is active
 
 // ============================================================================
 // DISPLAY FUNCTIONS
@@ -160,6 +167,13 @@ static void draw_status_line(void) {
     
     // Separator line
     u8g2_DrawHLine(&u8g2, 0, 52, 128);
+    
+    // Show "PAUSED" when editing
+    if (menu.editing) {
+        snprintf(status, sizeof(status), "PAUSED");
+        u8g2_DrawStr(&u8g2, 2, 62, status);
+        return;
+    }
     
     if (menu.mode == MODE_SEND) {
         if (menu.is_sending) {
@@ -283,15 +297,9 @@ static void rx_callback(uint8_t *data, uint8_t len, sx1262_packet_status_t *stat
 }
 
 /**
- * @brief Updates the LoRa configuration based on menu settings (thread-safe)
+ * @brief Updates the LoRa configuration based on menu settings
  */
 static void update_lora_config(void) {
-    
-    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Could not take LoRa mutex for config");
-        return;
-    }
-
     sx1262_config_t config = {
         .modem_mode = SX1262_MODEM_LORA,
         .frequency = 869525000,  // 869,525 MHz == Middle of G3 band
@@ -314,8 +322,6 @@ static void update_lora_config(void) {
         ESP_LOGI(TAG, "LoRa configured: SF%d BW%d CR%s Power%d", 
                  menu.sf, menu.bw, cr_to_string(menu.cr), menu.tx_power);
     }
-
-    xSemaphoreGive(lora_mutex);
 }
 
 /**
@@ -325,84 +331,112 @@ static void lora_send_task(void* parameter) {
     uint8_t packet[PACKET_SIZE];
     
     while (true) {
-        if (menu.mode == MODE_SEND) {
-            // Prepare packet
-            snprintf((char*)packet, PACKET_SIZE, 
-                     "PKT:%lu SF:%d BW:%d", menu.packets_sent, menu.sf, menu.bw);
-            
-            // Send (with mutex protection)
-            menu.is_sending = true;
-            request_display_update();
+        // Task is suspended when not in SEND mode
+        // If we're running, we send
         
-            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+        // Prepare packet
+        snprintf((char*)packet, PACKET_SIZE, 
+                 "PKT:%lu SF:%d BW:%d", menu.packets_sent, menu.sf, menu.bw);
+        
+        // Send
+        menu.is_sending = true;
+        request_display_update();
 
-                esp_err_t err = sx1262_send(packet, strlen((char*)packet));
-
-                xSemaphoreGive(lora_mutex);
-                
-                if (err == ESP_OK) {
-                    menu.packets_sent++;
-                    ESP_LOGI(TAG, "Sent packet #%lu", menu.packets_sent);
-                } else {
-                    ESP_LOGE(TAG, "Send failed: %s", esp_err_to_name(err));
-                }
-            } else {
-                ESP_LOGW(TAG, "Could not take LoRa mutex for send");
-            }
-
-            menu.is_sending = false;
-            request_display_update();
-            
-            vTaskDelay(pdMS_TO_TICKS(SEND_INTERVAL_MS));
+        esp_err_t err = sx1262_send(packet, strlen((char*)packet));
+        
+        if (err == ESP_OK) {
+            menu.packets_sent++;
+            ESP_LOGI(TAG, "Sent packet #%lu", menu.packets_sent);
         } else {
-            vTaskDelay(pdMS_TO_TICKS(100));
+            ESP_LOGE(TAG, "Send failed: %s", esp_err_to_name(err));
         }
+
+        menu.is_sending = false;
+        request_display_update();
+        
+        vTaskDelay(pdMS_TO_TICKS(SEND_INTERVAL_MS));
+    }
+}
+
+/**
+ * @brief Start sending packets
+ */
+static void start_send(void) {
+    if (tx_mode_active) {
+        return;  // Already running
+    }
+    
+    // Create task if it doesn't exist yet
+    if (send_task_handle == NULL) {
+        BaseType_t ret = xTaskCreate(
+            lora_send_task,
+            "lora_send",
+            4096,
+            NULL,
+            5,
+            &send_task_handle
+        );
+        
+        if (ret != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create send task");
+            return;
+        }
+        ESP_LOGI(TAG, "Send task created");
+    } else {
+        // Task exists, resume it
+        vTaskResume(send_task_handle);
+    }
+    
+    tx_mode_active = true;
+    ESP_LOGI(TAG, "Sending started");
+}
+
+/**
+ * @brief Stop sending packets
+ */
+static void stop_send(void) {
+    if (!tx_mode_active) {
+        return;  // Already stopped
+    }
+    
+    if (send_task_handle != NULL) {
+        vTaskSuspend(send_task_handle);
+        tx_mode_active = false;
+        ESP_LOGI(TAG, "Sending stopped");
     }
 }
 
 /**
  * @brief Start asynchronous receive mode
  */
-static void start_async_rx(void) {
+static void start_receive(void) {
     if (rx_mode_active) {
         return;  // Already active
     }
     
-    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
-        ESP_LOGI(TAG, "Starting async receive mode...");
-        esp_err_t err = sx1262_start_receive_async(rx_callback);
-        
-        if (err == ESP_OK) {
-            rx_mode_active = true;
-            ESP_LOGI(TAG, "Async RX mode started successfully");
-        } else {
-            ESP_LOGE(TAG, "Failed to start async RX: %s", esp_err_to_name(err));
-        }
-        
-        xSemaphoreGive(lora_mutex);
+    ESP_LOGI(TAG, "Starting async receive mode...");
+    esp_err_t err = sx1262_start_receive_async(rx_callback);
+    
+    if (err == ESP_OK) {
+        rx_mode_active = true;
+        ESP_LOGI(TAG, "Receiving started");
     } else {
-        ESP_LOGW(TAG, "Could not take LoRa mutex for starting RX");
+        ESP_LOGE(TAG, "Failed to start async RX: %s", esp_err_to_name(err));
     }
 }
 
 /**
  * @brief Stop asynchronous receive mode
  */
-static void stop_async_rx(void) {
+static void stop_receive(void) {
     if (!rx_mode_active) {
         return;  // Already stopped
     }
     
-    if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
-        ESP_LOGI(TAG, "Stopping async receive mode...");
-        sx1262_stop_receive_async();
-        rx_mode_active = false;
-        ESP_LOGI(TAG, "Async RX mode stopped");
-        
-        xSemaphoreGive(lora_mutex);
-    } else {
-        ESP_LOGW(TAG, "Could not take LoRa mutex for stopping RX");
-    }
+    ESP_LOGI(TAG, "Stopping async receive mode...");
+    sx1262_stop_receive_async();
+    rx_mode_active = false;
+    ESP_LOGI(TAG, "Receiving stopped");
 }
 
 /**
@@ -442,28 +476,17 @@ static void menu_next_item(void) {
  * @brief Next value for current menu item
  */
 static void menu_next_value(void) {
-    bool config_changed = true;
-    
     switch(menu.current_item) {
         case MENU_MODE:
-            // Stop async RX if currently in receive mode
-            if (menu.mode == MODE_RECEIVE) {
-                stop_async_rx();
-            }
-            
-            // Switch mode
+            // Switch mode (actual start/stop happens when exiting edit mode)
             menu.mode = (menu.mode == MODE_SEND) ? MODE_RECEIVE : MODE_SEND;
-            
-            // Start async RX if switching to receive mode
-            if (menu.mode == MODE_RECEIVE) {
-                start_async_rx();
-            }
             
             // Reset counters on mode change
             menu.packets_sent = 0;
             menu.packets_received = 0;
             menu.last_rssi = 0;
-            ESP_LOGI(TAG, "Mode: %s", menu.mode == MODE_SEND ? "SEND" : "RECEIVE");
+            ESP_LOGI(TAG, "Mode: %s (will be applied on exit)", 
+                     menu.mode == MODE_SEND ? "SEND" : "RECEIVE");
             break;
             
         case MENU_SF:
@@ -498,13 +521,7 @@ static void menu_next_value(void) {
             break;
             
         default:
-            config_changed = false;
             break;
-    }
-    
-    // Update LoRa configuration
-    if (config_changed) {
-        update_lora_config();
     }
     
     request_display_update();
@@ -515,7 +532,12 @@ static void menu_next_value(void) {
  */
 static void menu_enter_edit_mode(void) {
     menu.editing = true;
-    ESP_LOGI(TAG, "Edit mode: ON");
+    
+    // Always stop all operations
+    stop_send();
+    stop_receive();
+    
+    ESP_LOGI(TAG, "Edit mode: ON - All operations stopped");
     request_display_update();
 }
 
@@ -524,6 +546,18 @@ static void menu_enter_edit_mode(void) {
  */
 static void menu_exit_edit_mode(void) {
     menu.editing = false;
+    
+    // Apply new configuration
+    update_lora_config();
+    ESP_LOGI(TAG, "Configuration applied");
+    
+    // Start operations based on current mode
+    if (menu.mode == MODE_RECEIVE) {
+        start_receive();
+    } else {
+        start_send();
+    }
+    
     ESP_LOGI(TAG, "Edit mode: OFF");
     request_display_update();
 }
@@ -581,8 +615,8 @@ static void init_menu(void) {
     memset(&menu, 0, sizeof(menu_state_t));
     
     menu.current_item = MENU_MODE;
-    menu.editing = false;
-    menu.mode = MODE_RECEIVE;
+    menu.editing = true;  // Start in edit mode
+    menu.mode = MODE_SEND;
     menu.sf = 5;
     menu.bw = 125;
     menu.cr = LORA_CR_4_5;
@@ -640,9 +674,9 @@ static esp_err_t init_display(u8g2_t* display) {
 }
 
 /**
- * @brief Starts the LoRa tasks and Display task
+ * @brief Starts the Display task
  */
-static esp_err_t start_lora_tasks(void) {
+static esp_err_t start_display_task(void) {
     BaseType_t ret;
     
     // Display Update Task (highest priority for UI responsiveness)
@@ -660,22 +694,7 @@ static esp_err_t start_lora_tasks(void) {
         return ESP_FAIL;
     }
     
-    // Send Task
-    ret = xTaskCreate(
-        lora_send_task,
-        "lora_send",
-        4096,
-        NULL,
-        5,
-        &lora_task_handle
-    );
-    
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create send task");
-        return ESP_FAIL;
-    }
-    
-    ESP_LOGI(TAG, "LoRa tasks started");
+    ESP_LOGI(TAG, "Display task started");
     return ESP_OK;
 }
 
@@ -708,13 +727,6 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
         return ESP_FAIL;
     }
 
-    // Create mutex for thread-safe sx1262 access
-    lora_mutex = xSemaphoreCreateMutex();
-    if (lora_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create LoRa mutex");
-        return ESP_FAIL;
-    }
-
     // Initialize menu
     init_menu();
     
@@ -730,7 +742,7 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
         return ESP_FAIL;
     }
 
-        ESP_LOGI(TAG, "Initializing SX1262...");
+    ESP_LOGI(TAG, "Initializing SX1262...");
     if (sx1262_init_radio() != ESP_OK) {
         ESP_LOGE(TAG, "SX1262 initialization failed");
         return ESP_FAIL;
@@ -739,18 +751,13 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
     // Initial LoRa configuration
     update_lora_config();
     
-    // Start async RX if initial mode is RECEIVE
-    if (menu.mode == MODE_RECEIVE) {
-        start_async_rx();
-    }
-    
     // Initialize button
     if (init_button() != ESP_OK) {
         return ESP_FAIL;
     }
     
-    // Start LoRa tasks
-    if (start_lora_tasks() != ESP_OK) {
+    // Start display task
+    if (start_display_task() != ESP_OK) {
         return ESP_FAIL;
     }
     
@@ -759,13 +766,14 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
     request_display_update();
     
     ESP_LOGI(TAG, "=== LoRa TestTool Ready ===");
+    ESP_LOGI(TAG, "Started in Edit mode - press long to start operations");
     ESP_LOGI(TAG, "Navigation:");
     ESP_LOGI(TAG, "   Left Side (Menu):");
     ESP_LOGI(TAG, "     - Short Click: Next menu item");
-    ESP_LOGI(TAG, "     - Long Press:  Enter edit mode");
+    ESP_LOGI(TAG, "     - Long Press:  Enter edit mode (stops operations)");
     ESP_LOGI(TAG, "   Right Side (Edit):");
     ESP_LOGI(TAG, "     - Short Click: Next value");
-    ESP_LOGI(TAG, "     - Long Press:  Back to menu");
+    ESP_LOGI(TAG, "     - Long Press:  Exit edit mode (starts operations)");
     
     return ESP_OK;
 }
@@ -775,13 +783,13 @@ esp_err_t lora_testtool_init(u8g2_t* display) {
  */
 void lora_testtool_deinit(void) {
     // Stop async RX if active
-    stop_async_rx();
+    stop_receive();
     
     if (button) {
         button_delete(button);
     }
     
-    if (lora_task_handle) {
-        vTaskDelete(lora_task_handle);
+    if (send_task_handle) {
+        vTaskDelete(send_task_handle);
     }
 }

@@ -809,7 +809,8 @@ esp_err_t sx1262_start_receive_async(sx1262_rx_callback_t callback)
     gpio_install_isr_service(0); 
     
     ret = gpio_isr_handler_add(LORA_PIN_DIO1, sx1262_dio1_isr_handler, NULL);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        // Only fail on real errors, not "already installed"
         ESP_LOGE(TAG, "Failed to add ISR handler");
         vTaskDelete(rx_task_handle);
         rx_task_handle = NULL;
