@@ -725,9 +725,11 @@ static void sx1262_rx_task(void *arg)
         // Check what happened (read IRQ status)
         uint16_t irq_status = sx1262_get_irq_status();
 
-        // If RX Done
-        if (irq_status & SX1262_IRQ_RX_DONE) {
-            
+        // If RX Done and no CRC/Header error
+        bool rx_done  = irq_status & SX1262_IRQ_RX_DONE;
+        bool rx_error = irq_status & (SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR);
+        if (rx_done && !rx_error) {
+
             // Clear IRQ
             sx1262_clear_irq_status(SX1262_IRQ_RX_DONE);
 
@@ -753,9 +755,9 @@ static void sx1262_rx_task(void *arg)
         }
 
         // Error handling (CRC, Timeout)
-        if (irq_status & (SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR)) {
-            ESP_LOGW(TAG, "RX Error (CRC/Header)");
-            sx1262_clear_irq_status(SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR);
+        if (rx_error) {
+            ESP_LOGW(TAG, "RX Error (CRC/Header), record dropped");
+            sx1262_clear_irq_status(SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR | SX1262_IRQ_RX_DONE);
         }
 
         // Important: REACTIVATE reception mode (Continuous Mode)

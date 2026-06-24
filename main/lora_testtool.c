@@ -312,7 +312,7 @@ static void update_lora_config(void) {
         .preamble_length = 8,
         .payload_length = 0,  // Variable length
         .crc_on = true,
-        .sync_word = 0x1424  // Public network
+        .sync_word = 0x1424  // Private network
     };
     
     esp_err_t err = sx1262_configure(&config);
