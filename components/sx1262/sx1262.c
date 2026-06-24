@@ -626,6 +626,13 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
     while ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(wait_timeout)) {
         uint16_t irq_status = sx1262_get_irq_status();
         
+        if (irq_status & (SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR)) {
+            sx1262_clear_irq_status(SX1262_IRQ_CRC_ERROR | SX1262_IRQ_HEADER_ERROR | SX1262_IRQ_RX_DONE);
+            ESP_LOGW(TAG, "CRC/Header Error");
+            ret = ESP_FAIL;
+            return ret;
+        }
+
         if (irq_status & SX1262_IRQ_RX_DONE) {
             sx1262_clear_irq_status(SX1262_IRQ_RX_DONE);
             
@@ -673,17 +680,6 @@ esp_err_t sx1262_receive(uint8_t *data, uint8_t *len, uint32_t timeout_ms)
             sx1262_clear_irq_status(SX1262_IRQ_TIMEOUT);
             ESP_LOGD(TAG, "RX Timeout");
             ret = ESP_ERR_TIMEOUT;
-            return ret;
-        }
-        
-        if (irq_status & SX1262_IRQ_CRC_ERROR) {
-            ret = sx1262_clear_irq_status(SX1262_IRQ_CRC_ERROR);
-            if (ret != ESP_OK) {
-                return ret;
-            }
-
-            ESP_LOGW(TAG, "CRC Error");
-            ret = ESP_FAIL;
             return ret;
         }
         
