@@ -81,7 +81,7 @@
 #define SX1262_PACKET_TYPE_LORA             0x01
 
 // Register Addresses
-#define SY1262_REG_IQ_POLARITY_SETUP        0x0736
+#define SX1262_REG_IQ_POLARITY_SETUP        0x0736
 #define SX1262_REG_LORA_SYNC_WORD_MSB       0x0740
 #define SX1262_REG_LORA_SYNC_WORD_LSB       0x0741
 #define SX1262_REG_RANDOM_NUMBER_GEN        0x0819
@@ -462,6 +462,15 @@ void sx1262_stop_receive_async(void);
  * @note **NOT thread-safe**: Serialize concurrent calls or ensure exclusive access to the radio.
  */
 esp_err_t sx1262_sleep(void);
+
+/**
+ * @brief Release the SPI bus and reset SPI pins to safe states for deep sleep.
+ *
+ * Call after sx1262_sleep() and before gpio_deep_sleep_hold_en().
+ * Drives NSS HIGH as output (SX1262 wakes on NSS low), resets MOSI/SCK/MISO
+ * to high-Z inputs to prevent leakage. RST is left as output HIGH intentionally.
+ */
+esp_err_t sx1262_deinit_bus(void);
 
 /**
  * @brief Put the SX1262 transceiver into standby mode.
