@@ -1178,12 +1178,18 @@ static esp_err_t sx1262_read_register(uint16_t addr, uint8_t *data, uint8_t len)
  */
 static esp_err_t sx1262_spi_write_general(uint8_t *tx_header, uint8_t tx_header_len, uint8_t *data, uint8_t data_len, bool wait_after)
 {
+    // Wait until the chip is ready for a command
     sx1262_wait_on_busy();
 
+    // Total transaction size
     uint8_t total_len = tx_header_len + data_len;
+
+    // We need a single, contiguous buffer for SPI
     uint8_t tx_buffer[total_len];
 
+    // Copy header into the buffer
     memcpy(tx_buffer, tx_header, tx_header_len);
+    // Copy optional data into the buffer
     if (data != NULL && data_len > 0)
         memcpy(&tx_buffer[tx_header_len], data, data_len);
 
@@ -1195,6 +1201,7 @@ static esp_err_t sx1262_spi_write_general(uint8_t *tx_header, uint8_t tx_header_
 
     esp_err_t ret = spi_device_transmit(spi_handle, &trans);
 
+     // Wait until the chip has finished executing the command
     if (wait_after)
         sx1262_wait_on_busy();
 
